@@ -268,31 +268,56 @@ if 波形のゼロクロス点 && env > MIN_PHASE_LOCK {
 }
 ```
 
-### 3.6 自発発火 (spontaneous activity) — M1 input neuron に統合
+### 3.6 自発発火 (spontaneous activity) — M0 蝸牛が担当 (Step 0 検証結果)
 
-**設計判断**: 自発発火は M0 内部では生成しない。代わりに **M1 input neuron の `spontaneous_input` を有効化** (現状 0 → 2 に変更) する。
+**初期検討**: 「同じ脳・同じリズム」原則 (ユーザー指摘) から、M1 input neuron の
+`spontaneous_input = 0 → 2` に変更して内部ニューロンと同じリズムにする案を Step 0 で
+試行 (2026-05-24)。
 
-理由:
-- M1 内部の興奮性/抑制性ニューロンは既に `spontaneous_input = 2` を持つ (Na/K ポンプ密度差の個体差表現)
-- M1 input neuron だけが `spontaneous_input = 0` (純粋トランスデューサ)
-- **「同じ脳として同じリズムを刻む」** ことが自然 (ユーザー指摘)
-- M0 が「学習なし固定の信号変換装置」(CONTEXT.md §3) なら、ニューロン状態を持たないアルゴリズム的処理が筋
+**Step 0 結果 (負の結果)**:
+| 指標 | spont=0 (旧) | spont=2 (試行) | 変化 |
+|---|---|---|---|
+| PRE selectivity | 0.472 | 0.410 | -0.062 |
+| **POST selectivity** | 0.497 | **0.282** | **-0.215** |
+| within | 0.704 | 0.651 | -0.053 |
+| **between** | 0.207 | **0.370** | **+0.163** |
+| active | 10 | 10 | 同じ |
 
-実装の含意:
-- M0 = 純粋関数: 音波 → 各 step ごとの 20 次元電流ベクトル
-- M1 input neuron が「IHC + 聴神経 (中継含む)」を代表
-- 自発発火は M1 input neuron が `spontaneous_input = 2` で生成 (静音時の聴神経 spontaneous rate 50-100 Hz 相当)
-- DT_MS=0.5ms 系で `spontaneous_input = 2` だと、入力なしでも数百 step に 1 回発火する程度のリズム
+**原因分析**:
+- M1 input neuron に自発発火を入れると静音時も常時 ~67 Hz で発火
+- 全パターン提示時に「外部刺激由来 + 自発発火由来」が混在
+- パターン特異な時間構造が常時背景活動に埋もれる
+- 出力ニューロンが「パターン特異性」ではなく「背景活動への応答」を学んでしまう
+- 結果として between (異パターン応答類似度) が大幅上昇、識別性低下
 
-`thermo_neuron.rs` の以下を変更:
+**生物学的にも整合する解釈**:
+- 聴神経の spontaneous rate は **聴神経自体** の性質 (蝸牛 IHC 由来ではない)
+- M1 input neuron は「皮質に届いた信号」を表すので、ここに自発活動を入れると皮質が
+  「環境からの情報か内部ノイズか」を区別不能になる
+- 「同じ原則の盲目的適用は害になる」典型例
+
+**確定した設計**:
+- M0 蝸牛が「聴神経 spontaneous rate」を含むスパイク列を生成
+  - 蝸牛フィルタが音波から計算する電流に「決定論的個体差付きの背景電流」を加算
+  - 各帯域の自発発火頻度を 50-100 Hz スケールで設定
+- M1 input neuron の `spontaneous_input = 0` のまま維持 (受信専用トランスデューサ)
+- 階層責務分離: 信号生成 = M0、信号変換 = M1 input neuron
+
+M0 側での実装:
 ```rust
-pub fn input(position: (i32, i32)) -> Self {
-    Self {
-        // ...
-        spontaneous_input: 2,  // 0 → 2 に変更、M1 内部ニューロンと同じリズム
-        leak: 1,               // 必要なら少し leak を入れる (発火しすぎ防止)
-        // ...
+// cochlea.rs (Step 3 で実装):
+const SPONTANEOUS_BASE_CURRENT: [i32; 20] = [/* 各帯域の自発電流 */];
+// 値は決定論的個体差 (idx % N で計算)、聴神経 spontaneous rate を模倣
+
+fn process_step(&mut self, samples: &[i16]) -> [i32; 20] {
+    let mut output = [0i32; 20];
+    for ch in 0..20 {
+        // 帯域フィルタ + 包絡線 + 閾値判定で発火生成
+        let signal = self.process_band(ch, samples);
+        // 加えて自発発火 (静音時も常時 background)
+        output[ch] = signal + SPONTANEOUS_BASE_CURRENT[ch];
     }
+    output
 }
 ```
 

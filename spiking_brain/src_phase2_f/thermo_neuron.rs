@@ -128,8 +128,19 @@ impl ThermoNeuron {
         }
     }
 
-    /// 入力ニューロン (外部駆動)。
-    /// spontaneous_input=0、leak=0 で外部電流のみで動作する純粋トランスデューサ。
+    /// 入力ニューロン (外部駆動、純粋トランスデューサ)。
+    ///
+    /// 設計判断履歴:
+    ///   - 旧 (M1 単体): spontaneous_input=0、leak=0 で外部電流のみ
+    ///   - Step 0 試行: spontaneous_input=2、leak=1 (「同じ脳・同じリズム」原則)
+    ///       → POST selectivity 0.497 → 0.282 と低下、between 大幅上昇 (0.207→0.370)
+    ///       → 自発発火が「外部刺激由来かノイズか」を区別不能に
+    ///       → 設計違反として確定、復旧
+    ///   - 現在: spontaneous_input=0 (受信専用)、自発発火は M0 蝸牛が担当する設計に
+    ///
+    /// 階層責務分離:
+    ///   - M0 蝸牛: 聴神経 spontaneous rate を含むスパイク列生成
+    ///   - M1 input neuron: M0 出力を素直に受け取るトランスデューサ
     pub fn input(position: (i32, i32)) -> Self {
         Self {
             membrane: 0,
