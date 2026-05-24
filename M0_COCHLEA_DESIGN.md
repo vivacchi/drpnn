@@ -268,7 +268,13 @@ if 波形のゼロクロス点 && env > MIN_PHASE_LOCK {
 }
 ```
 
-### 3.6 自発発火 (spontaneous activity) — M0 蝸牛が担当 (Step 0 検証結果)
+### 3.6 自発発火 (spontaneous activity) — M1 input neuron が担当 (5.10 検証で確定)
+
+**結論 (2026-05-24 検証完了)**: 仮想 M0 等価性が成立。M0 内部で自発発火を生成する必要はなく、M1 input neuron の `spontaneous_input = 2` で十分。詳細は PAPER §5.10。
+
+----
+
+### 3.6.1 検証過程 (Step 0)
 
 **初期検討**: 「同じ脳・同じリズム」原則 (ユーザー指摘) から、M1 input neuron の
 `spontaneous_input = 0 → 2` に変更して内部ニューロンと同じリズムにする案を Step 0 で

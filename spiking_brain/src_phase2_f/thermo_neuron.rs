@@ -159,8 +159,8 @@ impl ThermoNeuron {
             refractory_period: 2,
             is_inhibitory: false,
             generates_entropy: false,
-            spontaneous_input: 0, // 自発入力なし (外部パターンのみ受ける)
-            leak: 0,              // リークなし (外部入力を素直に通す)
+            spontaneous_input: 2, // 検証中: 仮想 M0 等価性 (Step 0 結果の再解釈)
+            leak: 1,              // 過剰発火防止
             position,
         }
     }
