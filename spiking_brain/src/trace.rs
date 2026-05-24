@@ -58,6 +58,29 @@ impl OutputTrace {
             .collect()
     }
 
+    /// 時間 bin 化フィンガープリント (聴覚的評価向け、time x output の 2D を 1D に flatten)
+    ///
+    /// 戻り値: `n_outputs × n_bins` の長さの Vec<f64>
+    ///   インデックス: `out_idx * n_bins + bin_idx`
+    ///   各 bin の値: その bin 内で発火した回数 (整数値、f64 で保持)
+    ///
+    /// これにより:
+    ///   - 「いつ発火したか」(時間順序、bin 精度) が保存される
+    ///   - cosine similarity は 1D Vec として計算できる (既存ロジック流用)
+    ///   - 聴覚モデルとして妥当な評価が可能 (時間構造を直接比較)
+    pub fn time_binned_fingerprint(&self, t_end_ms: f64, bin_width_ms: f64) -> Vec<f64> {
+        let n_bins = (t_end_ms / bin_width_ms).ceil() as usize;
+        let mut fp = vec![0.0f64; self.n_outputs * n_bins];
+        for (i, q) in self.spikes.iter().enumerate() {
+            for &ts in q {
+                if ts < 0.0 || ts >= t_end_ms { continue; }
+                let b = ((ts / bin_width_ms) as usize).min(n_bins - 1);
+                fp[i * n_bins + b] += 1.0;
+            }
+        }
+        fp
+    }
+
     /// 蓄積している発火数
     pub fn total_spikes(&self) -> usize {
         self.spikes.iter().map(|q| q.len()).sum()

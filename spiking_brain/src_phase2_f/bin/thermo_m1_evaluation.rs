@@ -180,10 +180,25 @@ fn present_white_noise(
     out_log
 }
 
-fn fingerprint_from_log(log: &[(usize, f64)], n_out: usize, t_end: f64, tau: f64) -> Vec<f64> {
-    let mut tr = OutputTrace::new(n_out, tau);
+// ─────────────────────────────────────────────────────────
+// 評価指標 fingerprint (時間 bin 化、聴覚モデル向け)
+// ─────────────────────────────────────────────────────────
+//
+// 旧: t_end 時点での指数減衰加重 (n_output 次元、時間情報は tau=50ms で平滑化)
+// 新: bin_width ごとの発火カウント (n_output × n_bins 次元、時間構造を直接保持)
+//
+// 聴覚モデルとして「いつ・どこで発火したか」を直接比較できる
+//   bin_width = 10 ms → 300ms / 10ms = 30 bin
+//   n_output = 40 → 40 × 30 = 1200 次元の fingerprint
+
+/// 時間 bin 幅 (ms)。聴覚 phase locking (~5ms 精度) と音節レベル (~50ms) の間で 10ms 採用
+const FINGERPRINT_BIN_WIDTH_MS: f64 = 10.0;
+
+fn fingerprint_from_log(log: &[(usize, f64)], n_out: usize, t_end: f64, _tau: f64) -> Vec<f64> {
+    // tau は互換性のため引数に残すが、時間 bin 化版では未使用
+    let mut tr = OutputTrace::new(n_out, 50.0);
     for &(oi, t) in log { tr.record_spike(oi, t); }
-    tr.fingerprint(t_end)
+    tr.time_binned_fingerprint(t_end, FINGERPRINT_BIN_WIDTH_MS)
 }
 
 // ─────────────────────────────────────────────────────────
