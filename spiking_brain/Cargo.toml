@@ -1,0 +1,75 @@
+[package]
+name = "spiking_brain"
+version = "0.2.0"
+edition = "2021"
+description = "Polychronous spiking network with R-STDP, structural plasticity, and DRP cost modeling."
+
+[dependencies]
+rand = "0.8"
+rand_distr = "0.4"
+rayon = "1.10"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+
+[lib]
+name = "spiking_brain"
+path = "src/lib.rs"
+
+[[bin]]
+name = "continuous_brain"
+path = "src/bin/continuous_brain.rs"
+
+[[bin]]
+name = "binary_brain"
+path = "src/bin/binary_brain.rs"
+
+[[bin]]
+name = "drp_estimate"
+path = "src/bin/drp_estimate.rs"
+
+# Phase 2: 熱力学版 SNN (baseline)
+[[bin]]
+name = "thermo_m1_evaluation"
+path = "src_phase2/bin/thermo_m1_evaluation.rs"
+
+# Phase 2: 決定論性検証 (直列版 vs 並列版で完全一致確認)
+[[bin]]
+name = "verify_determinism"
+path = "src_phase2/bin/verify_determinism.rs"
+
+# Phase 2: 4位相ローテーション訓練版 (C10: 中間刺激)
+[[bin]]
+name = "thermo_m1_phase_input"
+path = "src_phase2/bin/thermo_m1_phase_input.rs"
+
+# Phase 2 Fork A: MIN_CONDUCTANCE 20→40
+[[bin]]
+name = "thermo_m1_evaluation_a"
+path = "src_phase2_a/bin/thermo_m1_evaluation.rs"
+
+# Phase 2 Fork B: 新生結線の decay 保護期間 (MATURATION_PERIOD 1000)
+[[bin]]
+name = "thermo_m1_evaluation_b"
+path = "src_phase2_b/bin/thermo_m1_evaluation.rs"
+
+# Phase 2 Fork C: Fork B + 新生結線 MIN_CONDUCTANCE=40
+[[bin]]
+name = "thermo_m1_evaluation_c"
+path = "src_phase2_c/bin/thermo_m1_evaluation.rs"
+
+# Phase 2 Fork D: 全シナプス初期 conductance=50 (信号均一化)
+[[bin]]
+name = "thermo_m1_evaluation_d"
+path = "src_phase2_d/bin/thermo_m1_evaluation.rs"
+
+# Phase 2 Fork E: 過剰接続版 (発生学的) — cortex 内 12800 plastic 結線 + 軸索成長
+[[bin]]
+name = "thermo_m1_evaluation_e"
+path = "src_phase2_e/bin/thermo_m1_evaluation.rs"
+
+# Phase 2 Fork F: 統合再設計 (vitality + LTP only + デール原則 + 過剰接続)
+[[bin]]
+name = "thermo_m1_evaluation_f"
+path = "src_phase2_f/bin/thermo_m1_evaluation.rs"
