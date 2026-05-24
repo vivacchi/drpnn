@@ -23,3 +23,4 @@ pub mod thermo_synapse;
 pub mod topology;
 pub mod axon_growth;
 pub mod thermo_network;
+pub mod cochlea;
