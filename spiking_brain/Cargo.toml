@@ -91,3 +91,8 @@ required-features = ["visualizer"]
 [[bin]]
 name = "m0_m1_pipeline"
 path = "src_phase2_f/bin/m0_m1_pipeline.rs"
+
+# Phase 2 Fork F: 内部状態レパートリ検証 (Kenet 2003 Phase 2 版)
+[[bin]]
+name = "internal_state_probe"
+path = "src_phase2_f/bin/internal_state_probe.rs"

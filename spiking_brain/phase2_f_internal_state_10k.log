@@ -1,0 +1,42 @@
+== 内部状態レパートリ検証 (Kenet 2003 Phase 2 版) ==
+  訓練: 固定 A-E パターン × 10000 試行 (仮想 M0 = M1 input spont=2)
+  検証: 訓練後の自発活動が刺激応答パターンと類似するか
+
+  ネットワーク: neurons=440, synapses=16880
+  patterns: 5 (n_input=20), n_output=40
+
+== Phase A: 訓練 10000 試行 ==
+    trial   1000: open=17921, grown=1041, pruned=0
+    trial   2000: open=11233, grown=1041, pruned=6688
+    trial   3000: open=9895, grown=1044, pruned=8029
+    trial   4000: open=9287, grown=1045, pruned=8638
+    trial   5000: open=9119, grown=1045, pruned=8806
+    trial   6000: open=8991, grown=1045, pruned=8934
+    trial   7000: open=8780, grown=1045, pruned=9145
+    trial   8000: open=8780, grown=1045, pruned=9145
+    trial   9000: open=8651, grown=1046, pruned=9275
+    trial  10000: open=8522, grown=1046, pruned=9404
+
+== Phase B: 訓練後の刺激応答 fingerprint 取得 ==
+    取得した刺激応答 fp: 100 個 (5 パターン × 20)
+
+== Phase C: 自発活動を 50 個の window で記録 ==
+    自発スパイク総数: 247 (10000 step 間)
+    非空 (発火あり) window: 50/50
+
+== Phase D: 自発 vs 刺激応答 類似度解析 ==
+
+  自発活動 fp の解析:
+    max cos sim (各 fp の最良パターン) 平均: 0.0114
+    全ペア cos sim (自発 × 5パターン) 平均: 0.0023
+    best パターン分布: A:0 B:3 C:0 D:0 E:47 
+
+  帰無対照: シャッフル fingerprint との比較
+    シャッフル max cos sim 平均: 0.0130
+
+  ─── 検定結果 ───
+    Welch t-statistic (max sim, 自発 vs シャッフル): t = -0.216
+    判定基準: |t| > 2 で p < 0.05, > 3 で p < 0.001
+    → 有意差なし: 自発活動は刺激パターンと独立
+
+  CSV: phase2_f_internal_state_probe.csv
