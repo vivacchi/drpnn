@@ -86,3 +86,8 @@ path = "src_phase2_f/bin/thermo_m1_evaluation.rs"
 name = "thermo_visualizer"
 path = "src_phase2_f/bin/thermo_visualizer.rs"
 required-features = ["visualizer"]
+
+# Phase 2 Fork F: M0 蝸牛 → M1 統合パイプライン (音素 5 種識別)
+[[bin]]
+name = "m0_m1_pipeline"
+path = "src_phase2_f/bin/m0_m1_pipeline.rs"

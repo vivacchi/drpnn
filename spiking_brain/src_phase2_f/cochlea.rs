@@ -166,6 +166,199 @@ pub fn erb_q_factor(f_hz: f64) -> f64 {
 }
 
 // ──────────────────────────────────────────────────────────────
+// Step 2: 包絡線検出 + 圧縮 + 閾値発火 (1 チャンネル)
+// ──────────────────────────────────────────────────────────────
+
+/// 包絡線検出器: 半波整流 + 整数 leaky integrator.
+///
+/// 生物対応: IHC の機械→電気変換における AC→DC 変換 (DC 成分 = rate code 源)。
+/// 出力は |bandpass_out| を low-pass で平滑した「強度」の指標。
+///
+/// 漏れ係数 LEAK_SHIFT で時定数を制御:
+///   env[n+1] = env[n] - (env[n] >> LEAK_SHIFT) + |x|
+///   LEAK_SHIFT=4 で 2^4=16 サンプル時定数 ≒ 1ms @ 16kHz
+#[derive(Clone, Debug)]
+pub struct EnvelopeDetector {
+    pub env: i32,
+    pub leak_shift: i32,
+}
+
+impl EnvelopeDetector {
+    pub fn new(leak_shift: i32) -> Self {
+        Self { env: 0, leak_shift }
+    }
+
+    /// 1 サンプル処理。入力は biquad の出力 (符号あり)、戻り値は包絡線値 (非負)。
+    #[inline]
+    pub fn process(&mut self, x: i32) -> i32 {
+        let rectified = x.abs();
+        // leaky integrator: env -= env >> shift; env += rectified
+        self.env -= self.env >> self.leak_shift;
+        self.env = self.env.saturating_add(rectified);
+        self.env
+    }
+
+    pub fn reset(&mut self) { self.env = 0; }
+}
+
+/// 整数平方根 (Newton-Raphson、~5 反復で 32bit 入力に対し収束)
+pub fn isqrt(n: i32) -> i32 {
+    if n <= 0 { return 0; }
+    let mut x = n;
+    let mut y = (x + 1) / 2;
+    while y < x {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    x
+}
+
+/// 圧縮器: 整数平方根による動的レンジ圧縮.
+///
+/// 生物対応: 外有毛細胞 (OHC) の能動増幅による対数圧縮の簡易版.
+/// 130 dB の物理ダイナミックレンジを 50 dB 程度の神経出力に圧縮.
+///
+/// sqrt(x) は対数より穏やかな圧縮だが整数演算で実装容易.
+/// log2 を使うなら別実装 (将来検討).
+#[inline]
+pub fn compress_sqrt(env: i32) -> i32 {
+    isqrt(env)
+}
+
+/// 閾値発火生成器: 1 チャンネル分.
+///
+/// 入力: 圧縮済みの包絡線値 (非負).
+/// 出力: 発火イベント (この step で発火したか) のフラグ.
+///
+/// 内部に蓄積カウンタを持ち、入力が閾値を超え続けると周期的に発火.
+/// パルス幅 (連続発火継続 step 数) と不応期を持つ.
+#[derive(Clone, Debug)]
+pub struct FireGenerator {
+    /// 発火させる包絡線下限 (これ未満は発火しない)
+    pub threshold: i32,
+    /// 不応期残り step (>0 なら発火しない)
+    pub refractory_remaining: i32,
+    /// 不応期長 step
+    pub refractory_period: i32,
+}
+
+impl FireGenerator {
+    pub fn new(threshold: i32, refractory_period: i32) -> Self {
+        Self { threshold, refractory_remaining: 0, refractory_period }
+    }
+
+    /// 1 step 処理. 戻り値: 発火したか.
+    #[inline]
+    pub fn process(&mut self, compressed_env: i32) -> bool {
+        if self.refractory_remaining > 0 {
+            self.refractory_remaining -= 1;
+            return false;
+        }
+        if compressed_env >= self.threshold {
+            self.refractory_remaining = self.refractory_period;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn reset(&mut self) { self.refractory_remaining = 0; }
+}
+
+// ──────────────────────────────────────────────────────────────
+// Step 3: 20 帯域に拡張 (Cochlea 構造体)
+// ──────────────────────────────────────────────────────────────
+
+/// 蝸牛 1 つ分の構造 (20 帯域).
+///
+/// 入力: 1 サンプル (i32, i16 範囲)
+/// 出力: 1 step (8 サンプル) ごとに 20 input neuron 用電流ベクトル
+///
+/// パイプライン:
+///   各サンプルごと:
+///     [BandpassBiquad × 20] → [EnvelopeDetector × 20]
+///   8 サンプル (1 step) ごと:
+///     [圧縮 + 閾値発火] → input current[20] を生成
+pub const N_BANDS: usize = 20;
+pub const SAMPLE_RATE_HZ: f64 = 16000.0;
+pub const SAMPLES_PER_STEP: usize = 8;  // DT_MS=0.5ms × 16kHz = 8
+pub const F_MIN_HZ: f64 = 50.0;
+pub const F_MAX_HZ: f64 = 4000.0;
+
+/// 発火閾値 (圧縮済み包絡線の閾値).
+/// 純音 amplitude 8000 で中心帯域は sqrt(env)≈230、非中心帯域は ~150 程度になる.
+/// 200 にすると中心帯域のみ発火 (周波数選択性確保).
+pub const FIRE_THRESHOLD: i32 = 200;
+/// パルス幅 (M1 input への electric current 値). M1 の INPUT_CURRENT=60 と整合.
+pub const FIRE_CURRENT: i32 = 60;
+/// 不応期 (step 単位). 連続音でも発火が頭打ちになる.
+pub const FIRE_REFRACTORY_STEPS: i32 = 4;
+/// 包絡線検出器の leak_shift (4 = 約 1ms 時定数)
+pub const ENV_LEAK_SHIFT: i32 = 4;
+
+#[derive(Clone, Debug)]
+pub struct Cochlea {
+    pub bands: Vec<BandpassBiquad>,
+    pub envelopes: Vec<EnvelopeDetector>,
+    pub fire_gens: Vec<FireGenerator>,
+    /// 各帯域の中心周波数 (デバッグ・可視化用)
+    pub center_freqs: Vec<f64>,
+}
+
+impl Cochlea {
+    /// 20 帯域、ERB スケール、サンプリングレート 16 kHz で構築.
+    pub fn new() -> Self {
+        let center_freqs = erb_spaced_freqs(F_MIN_HZ, F_MAX_HZ, N_BANDS);
+        let bands: Vec<BandpassBiquad> = center_freqs.iter()
+            .map(|&fc| BandpassBiquad::new(fc, erb_q_factor(fc), SAMPLE_RATE_HZ))
+            .collect();
+        let envelopes: Vec<EnvelopeDetector> = (0..N_BANDS)
+            .map(|_| EnvelopeDetector::new(ENV_LEAK_SHIFT))
+            .collect();
+        let fire_gens: Vec<FireGenerator> = (0..N_BANDS)
+            .map(|_| FireGenerator::new(FIRE_THRESHOLD, FIRE_REFRACTORY_STEPS))
+            .collect();
+        Self { bands, envelopes, fire_gens, center_freqs }
+    }
+
+    /// 1 step (= SAMPLES_PER_STEP サンプル) 処理.
+    /// 戻り値: 各 input neuron への電流 [N_BANDS]. 発火したら FIRE_CURRENT、それ以外 0.
+    pub fn process_step(&mut self, samples: &[i32]) -> [i32; N_BANDS] {
+        assert!(samples.len() == SAMPLES_PER_STEP,
+            "step samples must be {}", SAMPLES_PER_STEP);
+
+        // (a) 各サンプルを 20 帯域並列で処理し、包絡線を更新
+        for &x in samples {
+            for ch in 0..N_BANDS {
+                let bp_out = self.bands[ch].process(x);
+                let _env = self.envelopes[ch].process(bp_out);
+            }
+        }
+        // (b) step の最後で各帯域の包絡線を圧縮して閾値判定
+        let mut output = [0i32; N_BANDS];
+        for ch in 0..N_BANDS {
+            let env = self.envelopes[ch].env;
+            let compressed = compress_sqrt(env);
+            if self.fire_gens[ch].process(compressed) {
+                output[ch] = FIRE_CURRENT;
+            }
+        }
+        output
+    }
+
+    /// 状態リセット (新セッション開始時)
+    pub fn reset(&mut self) {
+        for b in &mut self.bands { b.reset(); }
+        for e in &mut self.envelopes { e.reset(); }
+        for f in &mut self.fire_gens { f.reset(); }
+    }
+}
+
+impl Default for Cochlea {
+    fn default() -> Self { Self::new() }
+}
+
+// ──────────────────────────────────────────────────────────────
 // テスト
 // ──────────────────────────────────────────────────────────────
 
@@ -285,5 +478,135 @@ mod tests {
         assert_eq!(filter.x2, 0);
         assert_eq!(filter.y1, 0);
         assert_eq!(filter.y2, 0);
+    }
+
+    // ─── Step 2 テスト ───
+
+    #[test]
+    fn isqrt_basic() {
+        assert_eq!(isqrt(0), 0);
+        assert_eq!(isqrt(1), 1);
+        assert_eq!(isqrt(4), 2);
+        assert_eq!(isqrt(9), 3);
+        assert_eq!(isqrt(100), 10);
+        assert_eq!(isqrt(10000), 100);
+        // 非完全平方数: 切り捨て
+        let s = isqrt(50);
+        assert!(s == 7 || s == 8, "isqrt(50) ≈ 7.07, got {}", s);
+    }
+
+    #[test]
+    fn envelope_rises_on_signal() {
+        let mut env = EnvelopeDetector::new(4);
+        // 振幅 1000 の DC 入力 (簡易テスト)
+        for _ in 0..200 {
+            env.process(1000);
+        }
+        // 漏れと積分の平衡: env ≈ 1000 × 2^4 = 16000
+        assert!(env.env > 10000 && env.env < 20000,
+            "envelope on DC=1000: {}", env.env);
+    }
+
+    #[test]
+    fn envelope_decays_after_signal() {
+        let mut env = EnvelopeDetector::new(4);
+        // 信号を入れる
+        for _ in 0..100 {
+            env.process(1000);
+        }
+        let peak = env.env;
+        // 信号停止
+        for _ in 0..200 {
+            env.process(0);
+        }
+        assert!(env.env < peak / 10, "envelope should decay: peak={}, after={}",
+            peak, env.env);
+    }
+
+    #[test]
+    fn fire_generator_respects_threshold() {
+        let mut fg = FireGenerator::new(100, 4);
+        // 閾値未満
+        assert!(!fg.process(50));
+        assert!(!fg.process(99));
+        // 閾値以上で発火
+        assert!(fg.process(100));
+        // 不応期中は発火しない
+        assert!(!fg.process(1000));
+        assert!(!fg.process(1000));
+        assert!(!fg.process(1000));
+        assert!(!fg.process(1000));
+        // 不応期明けで再発火可能
+        assert!(fg.process(1000));
+    }
+
+    // ─── Step 3 テスト ───
+
+    #[test]
+    fn cochlea_constructs_with_20_bands() {
+        let c = Cochlea::new();
+        assert_eq!(c.bands.len(), 20);
+        assert_eq!(c.envelopes.len(), 20);
+        assert_eq!(c.fire_gens.len(), 20);
+        assert_eq!(c.center_freqs.len(), 20);
+        // 周波数範囲
+        assert!((c.center_freqs[0] - 50.0).abs() < 1.0);
+        assert!((c.center_freqs[19] - 4000.0).abs() < 5.0);
+    }
+
+    /// 純音入力でその周波数帯域のみが発火する (周波数選択性)
+    #[test]
+    fn cochlea_frequency_selectivity() {
+        let mut c = Cochlea::new();
+        // 1000 Hz 純音、振幅 8000、1 秒分 (16000 sample) = 2000 step
+        let n_step = 2000;
+        let mut fire_counts = [0u32; N_BANDS];
+        // 過渡応答を避けて後半で集計
+        for step in 0..n_step {
+            let samples: Vec<i32> = (0..SAMPLES_PER_STEP).map(|s| {
+                let t = (step * SAMPLES_PER_STEP + s) as f64;
+                let phase = 2.0 * std::f64::consts::PI * 1000.0 * t / 16000.0;
+                (8000.0 * phase.sin()) as i32
+            }).collect();
+            let out = c.process_step(&samples);
+            if step >= n_step / 2 {
+                for (ch, &v) in out.iter().enumerate() {
+                    if v > 0 { fire_counts[ch] += 1; }
+                }
+            }
+        }
+        // 1000 Hz に最も近い帯域を見つける
+        let best_ch = c.center_freqs.iter()
+            .enumerate()
+            .min_by_key(|&(_, &f)| ((f - 1000.0).abs() * 1000.0) as i64)
+            .map(|(i, _)| i)
+            .unwrap();
+        let best_count = fire_counts[best_ch];
+
+        // 隣接以外の遠い帯域の発火は best より大幅に少ない
+        let far_ch_low = 0;   // 50 Hz
+        let far_ch_high = 19; // 4000 Hz
+        assert!(best_count > fire_counts[far_ch_low] * 3,
+            "near 1000Hz ch{} ({:.0}Hz) fires {}, far low ch{} ({:.0}Hz) fires {}",
+            best_ch, c.center_freqs[best_ch], best_count,
+            far_ch_low, c.center_freqs[far_ch_low], fire_counts[far_ch_low]);
+        assert!(best_count > fire_counts[far_ch_high] * 2,
+            "near 1000Hz ch{} fires {}, far high ch{} fires {}",
+            best_ch, best_count, far_ch_high, fire_counts[far_ch_high]);
+    }
+
+    #[test]
+    fn cochlea_silence_no_firing() {
+        let mut c = Cochlea::new();
+        // 無音 (zero) を入れて 100 step 動かす
+        let zero = vec![0i32; SAMPLES_PER_STEP];
+        let mut total_fires = 0u32;
+        for _ in 0..100 {
+            let out = c.process_step(&zero);
+            total_fires += out.iter().filter(|&&v| v > 0).count() as u32;
+        }
+        // 無音では発火しない (自発発火は M0 内では生成しない)
+        assert_eq!(total_fires, 0,
+            "silence should produce no firing, got {}", total_fires);
     }
 }
