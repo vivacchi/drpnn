@@ -8,6 +8,11 @@ description = "Polychronous spiking network with R-STDP, structural plasticity, 
 rand = "0.8"
 rand_distr = "0.4"
 rayon = "1.10"
+# リアルタイム可視化 (オプション、visualizer bin でのみ使用)
+macroquad = { version = "0.4", optional = true }
+
+[features]
+visualizer = ["macroquad"]
 
 [profile.release]
 opt-level = 3
@@ -73,3 +78,11 @@ path = "src_phase2_e/bin/thermo_m1_evaluation.rs"
 [[bin]]
 name = "thermo_m1_evaluation_f"
 path = "src_phase2_f/bin/thermo_m1_evaluation.rs"
+
+# Phase 2 Fork F: リアルタイム可視化 (macroquad, GPU 描画)
+#   build:  cargo build --release --features visualizer --bin thermo_visualizer
+#   run:    cargo run   --release --features visualizer --bin thermo_visualizer
+[[bin]]
+name = "thermo_visualizer"
+path = "src_phase2_f/bin/thermo_visualizer.rs"
+required-features = ["visualizer"]

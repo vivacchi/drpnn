@@ -171,7 +171,7 @@ mod tests {
         ];
         neurons[0].local_entropy = 100;
         neurons[1].local_entropy = 0;
-        let mut synapses = vec![ThermoSynapse::new_plastic(0, 1, 4, 50, false)];
+        let mut synapses = vec![ThermoSynapse::new(0, 1, 4, 50)];
         let topo = Topology::new(20, 20);
         let pos_idx = build_position_index(&neurons);
         let (created, _) = axon_growth_step(&mut neurons, &mut synapses, &topo, &pos_idx);

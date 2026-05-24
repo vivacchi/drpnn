@@ -23,6 +23,7 @@ pub const GROWTH_INTERVAL: i32 = 200;
 pub const SIGNAL_SCALE_DIVISOR: i32 = 10;
 
 /// ネットワーク構成設定
+#[derive(Debug, Clone)]
 pub struct ThermoNetworkConfig {
     /// グリッド幅・高さ
     pub grid_width: i32,
@@ -49,13 +50,18 @@ pub struct ThermoNetworkConfig {
 
 impl Default for ThermoNetworkConfig {
     fn default() -> Self {
+        // Fork F-G1-R1 v2: 1セル1ニューロン原則 + 皮質的均一密度
+        //   grid 20x22=440、入力 y=0 (20)、出力 y=20,21 (40)、内部 y=1..19 (380)
+        //   内部 380 = 興奮 304 + 抑制 76 (抑制比 18.1% = 皮質典型値 15-20% のど真ん中)
+        //   抑制配置ルール: (y+x) % 5 == 0 のセル (1-in-5 均一分散)
+        //   n_excitatory = 304 (内部) + 40 (出力) = 344
         Self {
             grid_width: 20,
-            grid_height: 20,
+            grid_height: 22,
             n_input: 20,
             n_output: 40,
-            n_excitatory: 320, // 残り 380 個 (400 - 20入力) のうち 320 興奮
-            n_inhibitory: 60,  // 60 抑制
+            n_excitatory: 344, // 内部 304 + 出力 40
+            n_inhibitory: 76,  // 内部 380 セル中 1/5 = 76 (18.1%)
             input_fanout: 80,
             delay_range: (2, 40),
             seed: 300,
@@ -118,77 +124,79 @@ impl ThermoNetwork {
         let grid_h = config.grid_height;
         let topology = Topology::new(grid_w, grid_h);
 
-        // ニューロン配置:
-        //   入力ニューロン: 上端の左 n_input 個 (x=0..n_input, y=0)
-        //   出力ニューロン: 下端の左 n_output 個 (x=0..n_output, y=grid_h-1)
-        //   抑制性: 上端の残り or 出力の下、または内部に分散
-        //   興奮性: 残りの内部セルに分散
+        // ニューロン配置 (Fork F-G1-R1 v2: 1セル1ニューロン原則):
+        //   入力 20  : y=0,             x=0..19
+        //   出力 40  : y=20, 21,        x=0..19 (各行 20 個、興奮性)
+        //   内部 380 : y=1..19,         x=0..19 (19 行 x 20 = 380 セル)
+        //     抑制 76 = (y+x) % 5 == 0 のセル (1-in-5 均一分散、各行 4 個 × 19 行 = 76)
+        //     興奮 304 = 残り (内部の 80% = 304 セル)
         //
-        // 簡単のため: 1 セル 1 ニューロン制で配置。grid_w * grid_h >= n_total 必須。
+        // すべてのセルに 1 ニューロン、重なりなし、DRP の PE = 1 ニューロン原則を遵守。
+        let internal_rows = (grid_h as usize) - 3; // y=0 入力 / y=H-2, H-1 出力 を除く
+        let internal_cells = internal_rows * (grid_w as usize);
+        let expected_internal = config.n_excitatory - config.n_output + config.n_inhibitory;
+        assert_eq!(
+            internal_cells, expected_internal,
+            "internal cell count mismatch: grid 内部 {} セル vs 配置必要 {} (exc-out + inh)",
+            internal_cells, expected_internal
+        );
+        assert_eq!(
+            config.n_input as i32, grid_w,
+            "input count ({}) must match grid_width ({})", config.n_input, grid_w
+        );
+        assert_eq!(
+            config.n_output as i32, grid_w * 2,
+            "output count ({}) must be 2 × grid_width ({}× 2 = {})",
+            config.n_output, grid_w, grid_w * 2
+        );
+
         let n_total = config.n_input + config.n_excitatory + config.n_inhibitory;
-        assert!(
-            (grid_w * grid_h) as usize >= n_total,
-            "grid too small: {} cells but {} neurons", grid_w * grid_h, n_total
+        assert_eq!(
+            (grid_w * grid_h) as usize, n_total,
+            "grid full-fill: {}×{}={} cells, n_total={}",
+            grid_w, grid_h, grid_w * grid_h, n_total
         );
 
         let mut neurons: Vec<ThermoNeuron> = Vec::with_capacity(n_total);
         let mut input_neurons: Vec<usize> = Vec::new();
         let mut output_neurons: Vec<usize> = Vec::new();
 
-        // (1) 入力ニューロン: 上端の左端から配置 (y=0, x=0..n_input)
-        for i in 0..config.n_input {
-            let x = i as i32 % grid_w;
-            let y = 0;
-            neurons.push(ThermoNeuron::input((x, y)));
+        // (1) 入力ニューロン: y=0、x=0..grid_w-1 (1 セル 1 個)
+        for x in 0..grid_w {
+            neurons.push(ThermoNeuron::input((x, 0)));
             input_neurons.push(neurons.len() - 1);
         }
 
-        // (2) 出力ニューロン (興奮性) は下端から (y=grid_h-1, x=0..n_output)
-        // n_output 個を興奮性として下端に配置。これは興奮性カウントに含める。
-        let mut placed_exc_at_bottom = 0;
-        for i in 0..config.n_output {
-            let x = (i as i32) % grid_w;
-            let y = grid_h - 1;
-            neurons.push(ThermoNeuron::excitatory((x, y)));
-            output_neurons.push(neurons.len() - 1);
-            placed_exc_at_bottom += 1;
+        // (2) 出力ニューロン (興奮性): y=grid_h-2, y=grid_h-1 の 2 行、各 grid_w 個
+        for dy in 0..2 {
+            let y = grid_h - 2 + dy;
+            for x in 0..grid_w {
+                neurons.push(ThermoNeuron::excitatory((x, y)));
+                output_neurons.push(neurons.len() - 1);
+            }
         }
 
-        // (3) 残りの興奮性ニューロンを内部 (y=1..grid_h-1) に配置
-        let remaining_exc = config.n_excitatory - placed_exc_at_bottom;
-        let mut cursor_x = 0i32;
-        let mut cursor_y = 1i32;
-        let mut placed_remaining_exc = 0;
-        while placed_remaining_exc < remaining_exc {
-            if cursor_y >= grid_h - 1 {
-                // 下端は出力で使ったので、内部行で配置
-                cursor_y = 1;
-                cursor_x += 1;
-                if cursor_x >= grid_w { break; }
+        // (3) 内部: y=1..grid_h-3 の 19 行を埋める
+        //   抑制性: (y + x) % 5 == 0 のセル → 各行 4 個 × 19 行 = 76 (18.1%)
+        //   興奮性: それ以外 → 各行 16 個 × 19 行 = 304 (72.4%)
+        let mut placed_inh = 0usize;
+        let mut placed_internal_exc = 0usize;
+        for y in 1..=(grid_h - 3) {
+            for x in 0..grid_w {
+                if (y + x) % 5 == 0 {
+                    neurons.push(ThermoNeuron::inhibitory((x, y)));
+                    placed_inh += 1;
+                } else {
+                    neurons.push(ThermoNeuron::excitatory((x, y)));
+                    placed_internal_exc += 1;
+                }
             }
-            neurons.push(ThermoNeuron::excitatory((cursor_x, cursor_y)));
-            placed_remaining_exc += 1;
-            cursor_y += 1;
         }
-
-        // (4) 抑制性ニューロンを残りの内部セルに配置
-        let mut placed_inh = 0;
-        cursor_x = 0;
-        cursor_y = 1;
-        while placed_inh < config.n_inhibitory {
-            if cursor_y >= grid_h - 1 {
-                cursor_y = 1;
-                cursor_x += 1;
-                if cursor_x >= grid_w { break; }
-            }
-            // 既存ニューロンとの衝突を避ける (簡易: position が既出ならスキップ)
-            let occupied = neurons.iter().any(|n| n.position == (cursor_x, cursor_y));
-            if !occupied {
-                neurons.push(ThermoNeuron::inhibitory((cursor_x, cursor_y)));
-                placed_inh += 1;
-            }
-            cursor_y += 1;
-        }
+        assert_eq!(placed_inh, config.n_inhibitory,
+            "inh placement: {} placed vs {} expected", placed_inh, config.n_inhibitory);
+        assert_eq!(placed_internal_exc, config.n_excitatory - config.n_output,
+            "internal exc placement: {} placed vs {} expected",
+            placed_internal_exc, config.n_excitatory - config.n_output);
 
         // ── Spontaneous activity の個体差を決定論的に割り当て ──
         // 各ニューロン (入力以外) に index 由来の spontaneous_input を設定

@@ -17,11 +17,17 @@ impl Topology {
         Self { grid_width, grid_height }
     }
 
-    /// 4 近傍 (上下左右) の有効座標を返す。境界外は除外。
+    /// 8 近傍 (Moore 近傍: 上下左右 + 斜め 4 方向) の有効座標を返す。境界外は除外。
+    /// Fork F-G1-R1 で 4 近傍から拡張: 自己を中心とする 3x3 から自身を除いた 8 セル。
+    /// 軸索成長の自由度を上げ、斜め方向への熱勾配経路形成を許容する。
     pub fn neighbors(&self, position: (i32, i32)) -> Vec<(i32, i32)> {
         let (x, y) = position;
-        let mut result = Vec::with_capacity(4);
-        for (dx, dy) in &[(-1, 0), (1, 0), (0, -1), (0, 1)] {
+        let mut result = Vec::with_capacity(8);
+        for (dx, dy) in &[
+            (-1, -1), (-1, 0), (-1, 1),
+            ( 0, -1),          ( 0, 1),
+            ( 1, -1), ( 1, 0), ( 1, 1),
+        ] {
             let nx = x + dx;
             let ny = y + dy;
             if nx >= 0 && nx < self.grid_width && ny >= 0 && ny < self.grid_height {
@@ -50,24 +56,28 @@ mod tests {
 
     #[test]
     fn neighbors_interior() {
+        // 8 近傍: 内部点では 8 個
         let t = Topology::new(20, 20);
         let nbs = t.neighbors((10, 10));
-        assert_eq!(nbs.len(), 4);
+        assert_eq!(nbs.len(), 8);
     }
 
     #[test]
     fn neighbors_corner() {
+        // 8 近傍: 角は (1,0), (0,1), (1,1) の 3 個
         let t = Topology::new(20, 20);
         let nbs = t.neighbors((0, 0));
-        assert_eq!(nbs.len(), 2);
+        assert_eq!(nbs.len(), 3);
         assert!(nbs.contains(&(1, 0)));
         assert!(nbs.contains(&(0, 1)));
+        assert!(nbs.contains(&(1, 1)));
     }
 
     #[test]
     fn neighbors_edge() {
+        // 8 近傍: エッジ (x=0, y=5) は (0,4), (0,6), (1,4), (1,5), (1,6) の 5 個
         let t = Topology::new(20, 20);
         let nbs = t.neighbors((0, 5));
-        assert_eq!(nbs.len(), 3);
+        assert_eq!(nbs.len(), 5);
     }
 }
