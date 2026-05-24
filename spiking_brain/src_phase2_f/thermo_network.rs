@@ -177,19 +177,31 @@ impl ThermoNetwork {
         }
 
         // (3) 内部: y=1..grid_h-3 の 19 行を埋める
-        //   抑制性: (y + x) % 5 == 0 のセル → 各行 4 個 × 19 行 = 76 (18.1%)
-        //   興奮性: それ以外 → 各行 16 個 × 19 行 = 304 (72.4%)
-        let mut placed_inh = 0usize;
-        let mut placed_internal_exc = 0usize;
+        //   全 380 セルから seed ベースで 76 セルをランダム選択 → 抑制
+        //   残り 304 セルに興奮
+        //   均一密度 (Rockel et al. 1980) + 配置はランダム (生物の皮質と整合)
+        //   seed 固定なので決定論性は保たれる
+        let mut internal_positions: Vec<(i32, i32)> = Vec::new();
         for y in 1..=(grid_h - 3) {
             for x in 0..grid_w {
-                if (y + x) % 5 == 0 {
-                    neurons.push(ThermoNeuron::inhibitory((x, y)));
-                    placed_inh += 1;
-                } else {
-                    neurons.push(ThermoNeuron::excitatory((x, y)));
-                    placed_internal_exc += 1;
-                }
+                internal_positions.push((x, y));
+            }
+        }
+        // 抑制ニューロンを配置する position のインデックス集合 (シャッフルで決定論的乱択)
+        let mut idx_pool: Vec<usize> = (0..internal_positions.len()).collect();
+        idx_pool.shuffle(&mut rng);
+        let inh_set: std::collections::HashSet<usize> =
+            idx_pool.into_iter().take(config.n_inhibitory).collect();
+
+        let mut placed_inh = 0usize;
+        let mut placed_internal_exc = 0usize;
+        for (i, &pos) in internal_positions.iter().enumerate() {
+            if inh_set.contains(&i) {
+                neurons.push(ThermoNeuron::inhibitory(pos));
+                placed_inh += 1;
+            } else {
+                neurons.push(ThermoNeuron::excitatory(pos));
+                placed_internal_exc += 1;
             }
         }
         assert_eq!(placed_inh, config.n_inhibitory,
