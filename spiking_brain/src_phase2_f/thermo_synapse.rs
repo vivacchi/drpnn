@@ -38,6 +38,9 @@ pub const VITALITY_GAIN: i32 = 1;
 /// S3 スケーリング (1:10000): 10,000 step = 5 秒に 1 回 -1
 /// → vitality 消失まで: 100 × 10,000 = 1×10⁶ step ≒ 1,700 trial で「使われない結線」が刈り込まれる
 /// 生物の数日 (数百万 step) を Phase 2 では数千 trial に圧縮、相関関係は維持
+///
+/// 試行: 30,000 (3 倍緩和) でも最終動的平衡点は同じ (pruned=11784, active=10) を確認。
+/// 時間スケールは「学習速度」を変えるが「平衡点」は変えない、という Prigogine 散逸構造論の予測通り
 pub const VITALITY_DECAY_INTERVAL: i32 = 10000;
 
 /// 熱力学的シナプス Fork F-fix (発生学的・原理厳格版)
