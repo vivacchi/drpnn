@@ -212,9 +212,16 @@ fn window_fingerprint(
 // ──────────────────────────────────────────────────────────────
 
 fn main() {
+    // CLI: internal_state_probe [n_train] [seed]
+    //   n_train: 訓練試行数 (デフォルト 10000)
+    //   seed:    ネットワーク初期化 seed (デフォルト 300、 multi-seed 検証で変更)
     let n_train: usize = std::env::args().nth(1)
         .and_then(|s| s.parse().ok())
         .unwrap_or(10000);
+    let seed: u64 = std::env::args().nth(2)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(300);
+    println!("  seed = {} (multi-seed 検証時は変更)", seed);
 
     println!("== 内部状態レパートリ検証 (Kenet 2003 Phase 2 版) ==");
     println!("  訓練: 固定 A-E パターン × {n_train} 試行 (仮想 M0 = M1 input spont=2)");
@@ -222,6 +229,7 @@ fn main() {
 
     let mut cfg = ThermoNetworkConfig::default();
     cfg.enable_up_down = true;  // PAPER §5.12.7-A: UP/DOWN 状態を有効化
+    cfg.seed = seed;             // CLI 引数で指定された seed (multi-seed 検証用)
     let mut net = ThermoNetwork::new(cfg);
     let n_input = net.input_neurons.len();
     println!("  UP/DOWN 状態: 有効 (up_offset=20, period 100-300ms 個体差)");
@@ -357,26 +365,11 @@ fn main() {
     let shuffle_max_mean = shuffle_max_sims.iter().sum::<f64>() / shuffle_max_sims.len() as f64;
     println!("    シャッフル max cos sim 平均: {:.4}", shuffle_max_mean);
 
-    // Welch t-test (簡易版): self-coded
-    fn welch_t(a: &[f64], b: &[f64]) -> (f64, f64) {
-        let mean_a = a.iter().sum::<f64>() / a.len() as f64;
-        let mean_b = b.iter().sum::<f64>() / b.len() as f64;
-        let var_a = a.iter().map(|&x| (x - mean_a).powi(2)).sum::<f64>() / (a.len() - 1) as f64;
-        let var_b = b.iter().map(|&x| (x - mean_b).powi(2)).sum::<f64>() / (b.len() - 1) as f64;
-        let se = ((var_a / a.len() as f64) + (var_b / b.len() as f64)).sqrt();
-        let t = (mean_a - mean_b) / se;
-        // 自由度は両群サイズの合計 - 2 として簡易化 (本来 Welch-Satterthwaite)
-        let df = (a.len() + b.len() - 2) as f64;
-        // ナイーブな p 近似: |t| > 2 で p < 0.05、|t| > 3 で p < 0.001 程度
-        // ここでは t のみ報告
-        let _ = df;
-        (t, 0.0) // p 値は近似困難なので t のみ
-    }
-    let (t_stat, _) = welch_t(&max_sims, &shuffle_max_sims);
+    let (t_stat, df_a, p_a) = welch_t_with_p(&max_sims, &shuffle_max_sims);
 
     println!("\n  ─── 検定結果 ───");
-    println!("    Welch t-statistic (max sim, 自発 vs シャッフル): t = {:.3}", t_stat);
-    println!("    判定基準: |t| > 2 で p < 0.05, > 3 で p < 0.001");
+    println!("    Welch t-test (max sim, 自発 vs シャッフル): t = {:.3}, df = {:.1}, p = {:.3e}",
+        t_stat, df_a, p_a);
     if t_stat > 3.0 {
         println!("    → 強く有意 (p < 0.001): 自発活動が訓練刺激パターンと有意に類似");
         println!("    → Kenet 2003「内部状態レパートリ」現象を Phase 2 で再現 ✓");
@@ -525,18 +518,11 @@ fn main() {
 
     println!("    シャッフル max cos sim 平均: {:.4}", int_shuffle_mean);
 
-    fn welch_t2(a: &[f64], b: &[f64]) -> f64 {
-        let mean_a = a.iter().sum::<f64>() / a.len() as f64;
-        let mean_b = b.iter().sum::<f64>() / b.len() as f64;
-        let var_a = a.iter().map(|&x| (x - mean_a).powi(2)).sum::<f64>() / (a.len() - 1) as f64;
-        let var_b = b.iter().map(|&x| (x - mean_b).powi(2)).sum::<f64>() / (b.len() - 1) as f64;
-        let se = ((var_a / a.len() as f64) + (var_b / b.len() as f64)).sqrt();
-        (mean_a - mean_b) / se
-    }
-    let t_internal = welch_t2(&int_max_sims, &int_shuffle_max_sims);
+    let (t_internal, df_int, p_int) = welch_t_with_p(&int_max_sims, &int_shuffle_max_sims);
 
     println!("\n  ─── 内部評価の検定結果 ───");
-    println!("    Welch t-statistic: t = {:.3}", t_internal);
+    println!("    Welch t-test: t = {:.3}, df = {:.1}, p = {:.3e}",
+        t_internal, df_int, p_int);
     if t_internal > 3.0 {
         println!("    → 強く有意 (p<0.001): 内部レパートリ存在を強く支持 ✓");
         println!("    → 出力 layer だけでは見えなかった「内部状態レパートリ」を検出");
@@ -595,11 +581,12 @@ fn main() {
     }
     let sp_shuffle_mean = spatial_shuffle_max_sims.iter().sum::<f64>()
         / spatial_shuffle_max_sims.len() as f64;
-    let t_spatial = welch_t2(&int_max_sims, &spatial_shuffle_max_sims);
+    let (t_spatial, df_sp, p_sp) = welch_t_with_p(&int_max_sims, &spatial_shuffle_max_sims);
 
     println!("  空間保存シャッフル max sim 平均: {:.4} (元の sim {:.4})",
         sp_shuffle_mean, int_max_mean);
-    println!("  Welch t-statistic (内部 vs 空間保存): t = {:.3}", t_spatial);
+    println!("  Welch t-test (内部 vs 空間保存): t = {:.3}, df = {:.1}, p = {:.3e}",
+        t_spatial, df_sp, p_sp);
     if t_spatial > 3.0 {
         println!("    → 強く有意 (p<0.001): 自発活動の時間構造が刺激パターンと整合 ✓");
         println!("    → Kenet 2003 内部状態レパートリを定量的に実証");
@@ -668,6 +655,54 @@ fn main() {
         }
         println!();
     }
+}
+
+/// Welch t-test (Welch-Satterthwaite 自由度 + 正規近似両側 p 値).
+///
+/// Tier 3 修正 (2026-05-25): 旧 welch_t/welch_t2 を統合・改善。
+/// 自由度は厳密な Welch-Satterthwaite 式。p 値は df >= 30 で正規分布近似が
+/// 実用的 (本プロジェクトでは active 数 30-50 が多いため十分)。
+/// 評価ツール内の f64 演算は許容範囲 (PAPER §5.11.X 参照)。
+///
+/// 戻り値: (t-statistic, degrees of freedom, two-tailed p-value)
+fn welch_t_with_p(a: &[f64], b: &[f64]) -> (f64, f64, f64) {
+    let mean_a = a.iter().sum::<f64>() / a.len() as f64;
+    let mean_b = b.iter().sum::<f64>() / b.len() as f64;
+    let var_a = a.iter().map(|&x| (x - mean_a).powi(2)).sum::<f64>()
+        / (a.len() - 1).max(1) as f64;
+    let var_b = b.iter().map(|&x| (x - mean_b).powi(2)).sum::<f64>()
+        / (b.len() - 1).max(1) as f64;
+    let n_a = a.len() as f64;
+    let n_b = b.len() as f64;
+    let se2 = var_a / n_a + var_b / n_b;
+    let se = se2.sqrt();
+    let t = if se < 1e-12 { 0.0 } else { (mean_a - mean_b) / se };
+
+    // Welch-Satterthwaite 自由度
+    let df_num = se2 * se2;
+    let df_den = (var_a / n_a).powi(2) / (n_a - 1.0).max(1.0)
+        + (var_b / n_b).powi(2) / (n_b - 1.0).max(1.0);
+    let df = if df_den < 1e-12 { (n_a + n_b - 2.0).max(1.0) } else { df_num / df_den };
+
+    // 両側 p 値 (df >= 30 で正規近似が実用、本プロジェクトの規模なら十分)
+    let p = 2.0 * (1.0 - phi(t.abs()));
+    (t, df, p)
+}
+
+/// 標準正規分布 CDF (Abramowitz & Stegun 7.1.26 系の有理多項式近似、誤差 1e-7)
+fn phi(x: f64) -> f64 {
+    // 1 - erfc(x/sqrt(2)) / 2 を逆算
+    let a1 = 0.254829592_f64;
+    let a2 = -0.284496736_f64;
+    let a3 = 1.421413741_f64;
+    let a4 = -1.453152027_f64;
+    let a5 = 1.061405429_f64;
+    let p = 0.3275911_f64;
+    let sign = if x < 0.0 { -1.0 } else { 1.0 };
+    let xx = x.abs() / (2.0_f64).sqrt();
+    let t = 1.0 / (1.0 + p * xx);
+    let y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * (-xx * xx).exp();
+    0.5 * (1.0 + sign * y)
 }
 
 /// 内部ニューロン版の window fingerprint.
