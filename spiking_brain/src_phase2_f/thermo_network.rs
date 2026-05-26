@@ -46,6 +46,9 @@ pub struct ThermoNetworkConfig {
     pub axon_growth_interval: i32,
     /// dt (ms / step) — 配送遅延の解釈用
     pub dt_ms: f64,
+    /// UP/DOWN 状態を有効化するか (PAPER §5.12.7-A、池谷 2005)
+    /// false で既存動作 (up_offset=0 と等価)、true で多重アトラクター物理実装
+    pub enable_up_down: bool,
 }
 
 impl Default for ThermoNetworkConfig {
@@ -67,6 +70,7 @@ impl Default for ThermoNetworkConfig {
             seed: 300,
             axon_growth_interval: GROWTH_INTERVAL,
             dt_ms: 0.5,
+            enable_up_down: false, // デフォルト OFF (既存実験との互換性、有効化は明示的に)
         }
     }
 }
@@ -225,6 +229,27 @@ impl ThermoNetwork {
             }
             n.spontaneous_input = (idx as i32) % 4;
             // leak は excitatory()/inhibitory() で既に 2 設定済み
+        }
+
+        // ── UP/DOWN 状態の有効化 (PAPER §5.12.7-A) ──
+        // 各ニューロンに個体差付きの周期を割り当て、初期状態は idx で決定
+        // 確率なし、完全決定論的 (原理 3)
+        if config.enable_up_down {
+            for (idx, n) in neurons.iter_mut().enumerate() {
+                // 入力ニューロンは UP/DOWN なし (純粋トランスデューサ維持)
+                if !n.generates_entropy && n.spontaneous_input == 0 {
+                    continue;
+                }
+                // UP/DOWN 周期 (生物の UP 状態 100-500ms, DT_MS=0.5ms → 200-1000step)
+                // 個体差を素数で揃えて互いに同期しないようにする
+                n.up_period = 200 + ((idx as i32) * 31) % 200;   // 200-399 step (100-200ms)
+                n.down_period = 300 + ((idx as i32) * 37) % 300; // 300-599 step (150-300ms)
+                // 初期状態を idx 由来で散らす (半数が UP、半数が DOWN から開始)
+                n.up_state = (idx % 2) == 0;
+                n.up_down_counter = (idx as i32) % 100;
+                // up_offset: 閾値 80 に対して 20 程度 (脱分極相当、生物 10mV ≒ 25% 寄与)
+                n.up_offset = 20;
+            }
         }
 
         // 位置→インデックスマップ

@@ -1,0 +1,73 @@
+== 内部状態レパートリ検証 (Kenet 2003 Phase 2 版) ==
+  訓練: 固定 A-E パターン × 10000 試行 (仮想 M0 = M1 input spont=2)
+  検証: 訓練後の自発活動が刺激応答パターンと類似するか
+  UP/DOWN 状態: 有効 (up_offset=20, period 100-300ms 個体差)
+
+  ネットワーク: neurons=440, synapses=16880
+  patterns: 5 (n_input=20), n_output=40
+
+== Phase A: 訓練 10000 試行 ==
+    trial   1000: open=19182, grown=2302, pruned=0
+    trial   2000: open=19186, grown=2306, pruned=0
+    trial   3000: open=19187, grown=2307, pruned=0
+    trial   4000: open=19188, grown=2308, pruned=0
+    trial   5000: open=19188, grown=2308, pruned=0
+    trial   6000: open=19188, grown=2308, pruned=0
+    trial   7000: open=19188, grown=2308, pruned=0
+    trial   8000: open=19188, grown=2308, pruned=0
+    trial   9000: open=19188, grown=2308, pruned=0
+    trial  10000: open=19188, grown=2308, pruned=0
+
+== Phase B: 訓練後の刺激応答 fingerprint 取得 ==
+    取得した刺激応答 fp: 100 個 (5 パターン × 20)
+
+== Phase C: 自発活動を 50 個の window で記録 ==
+    自発スパイク総数: 1066 (10000 step 間)
+    非空 (発火あり) window: 50/50
+
+== Phase D: 自発 vs 刺激応答 類似度解析 ==
+
+  自発活動 fp の解析:
+    max cos sim (各 fp の最良パターン) 平均: 0.0796
+    全ペア cos sim (自発 × 5パターン) 平均: 0.0654
+    best パターン分布: A:12 B:9 C:6 D:17 E:6 
+
+  帰無対照: シャッフル fingerprint との比較
+    シャッフル max cos sim 平均: 0.0846
+
+  ─── 検定結果 ───
+    Welch t-statistic (max sim, 自発 vs シャッフル): t = -1.047
+    判定基準: |t| > 2 で p < 0.05, > 3 で p < 0.001
+    → 有意差なし: 自発活動は刺激パターンと独立
+
+  CSV: phase2_f_internal_state_probe.csv
+
+══════════════════════════════════════════════════════════
+== 仮説 1 検証: 内部 380 ニューロン全体での評価 ==
+══════════════════════════════════════════════════════════
+  内部ニューロン数: 420
+
+== Phase B': 内部全体の刺激応答 fingerprint 取得 ==
+    取得した内部刺激応答 fp: 5 × 20 (次元 12600)
+
+== Phase C': 内部 380 ニューロン自発活動を記録 ==
+    自発スパイク総数 (内部): 11248 (10000 step 間)
+    非空 (発火あり) window: 50/50
+
+== Phase D': 内部自発 vs 内部刺激応答 ==
+
+  内部自発活動 fp の解析:
+    max cos sim 平均: 0.0770
+    全ペア cos sim 平均: 0.0720
+    best パターン分布: A:8 B:8 C:11 D:18 E:5 
+    シャッフル max cos sim 平均: 0.0750
+
+  ─── 内部評価の検定結果 ───
+    Welch t-statistic: t = 1.316
+    → 弱い傾向: 出力 layer よりは強いが、有意ではない
+
+══════════════════════════════════════════════════════════
+  最終サマリ: 出力 layer vs 内部 380 ニューロン
+══════════════════════════════════════════════════════════
+  出力 layer  : t = -1.047, max_sim_mean = 0.0796 (shuffle 0.0846)
+  内部 380   : t =  1.316, max_sim_mean = 0.0770 (shuffle 0.0750)

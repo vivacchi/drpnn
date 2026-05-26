@@ -70,6 +70,20 @@ pub struct ThermoNeuron {
     /// 毎 step の膜電位漏れ (リーク電流)。生物の細胞膜漏電に相当。
     pub leak: i32,
 
+    // ─── UP/DOWN 状態 (池谷 2005 §5.12.7-A 実装) ─────────────
+    /// UP 状態か (true=UP脱分極、false=DOWN静止). PAPER §5.12.7-A.
+    /// 自発的に振動、決定論的個体差付き周期 (確率なし)
+    /// 池谷 2005「自発的に内部状態を生み出すオートポイエーシス系」の物理実装
+    pub up_state: bool,
+    /// 内部カウンタ (周期内の位置)
+    pub up_down_counter: i32,
+    /// UP 状態の長さ (個体差、step 単位)
+    pub up_period: i32,
+    /// DOWN 状態の長さ (個体差、step 単位)
+    pub down_period: i32,
+    /// UP 状態時の膜電位オフセット (脱分極相当)。0 なら UP/DOWN 無効化と等価
+    pub up_offset: i32,
+
     // ─── 物理配置 ─────────────────────
     /// 2D グリッド上の位置 (軸索成長で参照)
     pub position: (i32, i32),
@@ -99,6 +113,12 @@ impl ThermoNeuron {
             generates_entropy: true,
             spontaneous_input: 2, // デフォルト中央値、後で個体差で上書き
             leak: 2,
+            // UP/DOWN デフォルト OFF (up_offset=0 で既存動作と互換、ThermoNetwork で設定)
+            up_state: false,
+            up_down_counter: 0,
+            up_period: 100,
+            down_period: 100,
+            up_offset: 0,
             position,
         }
     }
@@ -124,6 +144,12 @@ impl ThermoNeuron {
             generates_entropy: true,
             spontaneous_input: 2,
             leak: 2,
+            // UP/DOWN デフォルト OFF
+            up_state: false,
+            up_down_counter: 0,
+            up_period: 100,
+            down_period: 100,
+            up_offset: 0,
             position,
         }
     }
@@ -161,6 +187,12 @@ impl ThermoNeuron {
             generates_entropy: false,
             spontaneous_input: 2, // 検証中: 仮想 M0 等価性 (Step 0 結果の再解釈)
             leak: 1,              // 過剰発火防止
+            // UP/DOWN デフォルト OFF
+            up_state: false,
+            up_down_counter: 0,
+            up_period: 100,
+            down_period: 100,
+            up_offset: 0,
             position,
         }
     }
@@ -172,16 +204,32 @@ impl ThermoNeuron {
         // (0) B4: spike_trace の自然減衰 (発火痕跡が時間とともに消える)
         if self.spike_trace > 0 { self.spike_trace -= 1; }
 
+        // (1) UP/DOWN 状態遷移 (池谷 2005 PAPER §5.12.7-A)
+        //     up_offset=0 なら無効化 (既存動作と完全互換)
+        //     up_offset>0 なら up_period/down_period で自発振動、UP 時のみ膜電位ブースト
+        if self.up_offset > 0 {
+            self.up_down_counter += 1;
+            let cur_period = if self.up_state { self.up_period } else { self.down_period };
+            if self.up_down_counter >= cur_period {
+                self.up_state = !self.up_state;
+                self.up_down_counter = 0;
+            }
+        }
+
         // G-1: refractory_remaining チェックは撤廃
         // 不応期は ENTHALPY_PER_SPIKE 消費 + 自然回復で emergent に発生
         // (refractory_remaining フィールド自体は構造体に残るが、常に 0)
 
-        // (2) 膜電位の物理プロセス: 入力 + 自発活動 - リーク
+        // (2) 膜電位の物理プロセス: 入力 + 自発活動 - リーク (+ UP 状態ブースト)
         //     - 外部/シナプス入力 (input_current)
         //     - 自発入力 (Na/K ポンプ密度差に対応する個体差ある定常入力)
         //     - リーク (細胞膜漏電による自然減衰)
+        //     - UP 状態時の膜電位オフセット (脱分極相当)
         self.membrane = self.membrane.saturating_add(input_current);
         self.membrane = self.membrane.saturating_add(self.spontaneous_input);
+        if self.up_state {
+            self.membrane = self.membrane.saturating_add(self.up_offset);
+        }
         self.membrane = self.membrane.saturating_sub(self.leak);
         if self.membrane < 0 { self.membrane = 0; }
 

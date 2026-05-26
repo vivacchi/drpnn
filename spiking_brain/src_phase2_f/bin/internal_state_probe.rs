@@ -218,9 +218,11 @@ fn main() {
     println!("  訓練: 固定 A-E パターン × {n_train} 試行 (仮想 M0 = M1 input spont=2)");
     println!("  検証: 訓練後の自発活動が刺激応答パターンと類似するか");
 
-    let cfg = ThermoNetworkConfig::default();
+    let mut cfg = ThermoNetworkConfig::default();
+    cfg.enable_up_down = true;  // PAPER §5.12.7-A: UP/DOWN 状態を有効化
     let mut net = ThermoNetwork::new(cfg);
     let n_input = net.input_neurons.len();
+    println!("  UP/DOWN 状態: 有効 (up_offset=20, period 100-300ms 個体差)");
     let n_out = net.output_neurons.len();
     let patterns = make_eval_pattern_set(n_input);
 
