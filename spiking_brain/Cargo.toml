@@ -96,3 +96,8 @@ path = "src_phase2_f/bin/m0_m1_pipeline.rs"
 [[bin]]
 name = "internal_state_probe"
 path = "src_phase2_f/bin/internal_state_probe.rs"
+
+# Phase 2 Fork F: M0+M1+M2 3階層統合パイプライン (M2 A2 二次聴覚野)
+[[bin]]
+name = "m0_m1_m2_pipeline"
+path = "src_phase2_f/bin/m0_m1_m2_pipeline.rs"
