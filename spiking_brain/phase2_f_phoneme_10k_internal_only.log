@@ -1,0 +1,71 @@
+== M0+M1 パイプライン: 音素 5 種識別 ==
+  音素: pa, ki, tu, se, mo
+  M0: 20 帯域蝸牛 (ERB スケール 50Hz-4kHz)
+  M1: Fork F-G1-R1 v2 (8 近傍, 1セル1ニューロン)
+  評価: 時間 bin 化 fingerprint (40 出力 × 30 bin)
+  UP/DOWN 状態: 無効 (dense 入力では過剰刺激になる、§5.12.7-A 検証結果)
+
+  音節波形を生成中...
+    pa: 3200 samples, RMS=4634
+    ki: 3200 samples, RMS=4609
+    tu: 3200 samples, RMS=4780
+    se: 3200 samples, RMS=7235
+    mo: 3200 samples, RMS=3391
+
+  ネットワーク:
+    neurons   : 440
+    synapses  : 16880 (open=16880)
+    fanout    : input=80, grid=20x22
+
+== Phase 1: 訓練前評価 ==
+
+  -- PRE --
+    selectivity   : 0.326  (within 0.551 - between 0.225)
+    active outputs: 34 / 40
+    hit /syllable : pa:34/40  ki:17/40  tu:22/40  se:17/40  mo:11/40  (across 20 samples)
+    total spikes  : pa:391  ki:290  tu:293  se:473  mo:246  
+
+== Phase 2: 訓練 10000 試行 (音節ランダム選択) ==
+  snap_interval = 500
+    500  within=0.951  sel=0.408  act=12/40  ent_μ=61.8  cond_μ=5.0  open=17710  grown/pruned=830/0
+   1000  within=0.935  sel=0.391  act=12/40  ent_μ=62.0  cond_μ=5.0  open=17713  grown/pruned=833/0
+   1500  within=0.971  sel=0.375  act=12/40  ent_μ=61.9  cond_μ=4.9  open=15143  grown/pruned=833/2570
+   2000  within=0.990  sel=0.389  act=12/40  ent_μ=61.8  cond_μ=4.9  open=7431  grown/pruned=833/10282
+   2500  within=0.990  sel=0.389  act=12/40  ent_μ=61.8  cond_μ=4.9  open=7246  grown/pruned=833/10467
+   3000  within=0.984  sel=0.385  act=12/40  ent_μ=61.9  cond_μ=4.9  open=7080  grown/pruned=834/10634
+   3500  within=0.984  sel=0.385  act=12/40  ent_μ=61.7  cond_μ=4.9  open=7080  grown/pruned=834/10634
+   4000  within=0.986  sel=0.386  act=12/40  ent_μ=61.7  cond_μ=4.9  open=7080  grown/pruned=834/10634
+   4500  within=0.986  sel=0.386  act=12/40  ent_μ=61.7  cond_μ=4.9  open=7080  grown/pruned=834/10634
+   5000  within=0.990  sel=0.389  act=12/40  ent_μ=61.8  cond_μ=4.9  open=7080  grown/pruned=834/10634
+   5500  within=0.986  sel=0.386  act=12/40  ent_μ=61.9  cond_μ=4.9  open=7018  grown/pruned=834/10696
+   6000  within=0.986  sel=0.386  act=12/40  ent_μ=61.9  cond_μ=4.9  open=7018  grown/pruned=834/10696
+   6500  within=0.990  sel=0.389  act=12/40  ent_μ=61.7  cond_μ=4.7  open=7018  grown/pruned=834/10696
+   7000  within=0.990  sel=0.389  act=12/40  ent_μ=61.8  cond_μ=4.7  open=6994  grown/pruned=834/10720
+   7500  within=0.990  sel=0.389  act=12/40  ent_μ=61.7  cond_μ=4.7  open=6994  grown/pruned=834/10720
+   8000  within=0.986  sel=0.386  act=12/40  ent_μ=61.7  cond_μ=4.7  open=6994  grown/pruned=834/10720
+   8500  within=0.986  sel=0.386  act=12/40  ent_μ=61.7  cond_μ=4.7  open=6994  grown/pruned=834/10720
+   9000  within=0.990  sel=0.389  act=12/40  ent_μ=61.7  cond_μ=4.7  open=6994  grown/pruned=834/10720
+   9500  within=0.986  sel=0.386  act=12/40  ent_μ=61.7  cond_μ=4.7  open=6580  grown/pruned=834/11134
+  10000  within=0.990  sel=0.389  act=12/40  ent_μ=61.9  cond_μ=4.7  open=6580  grown/pruned=834/11134
+
+== Phase 3: 訓練後評価 (出力 layer 40) ==
+
+  -- POST (output) --
+    selectivity   : 0.389  (within 0.989 - between 0.600)
+    active outputs: 12 / 40
+    hit /syllable : pa:10/40  ki:10/40  tu:10/40  se:12/40  mo:10/40  (across 20 samples)
+    total spikes  : pa:220  ki:280  tu:220  se:247  mo:280  
+
+══════════════════════════════════════════════════════════
+== Phase 3b: 内部 420 ニューロン全体での再評価 ==
+══════════════════════════════════════════════════════════
+  内部ニューロン数: 420
+  -- POST (internal 420) --
+    selectivity   : 0.302  (within 0.991 - between 0.689)
+    fingerprint dim: 420 × 30 bin = 12600
+
+══════════════════════════════════════════════════════════
+  M0+M1 音素識別サマリ
+  軸索成長 累積=834 刈り取り累積=11134
+  open シナプス: 6580/17714
+  CSV: phase2_f_phoneme_snapshots.csv
