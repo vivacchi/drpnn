@@ -103,7 +103,17 @@ impl OutputTrace {
 }
 
 /// コサイン類似度
+/// コサイン類似度. **寸法不一致は panic** にする (silent error 防止).
+///
+/// 2026-05-25 以前は `zip` で短い方に揃えていたが、これは fingerprint 寸法
+/// 不一致 (4200 vs 12600) を silent に許容してしまい、§5.12.3a で誤った
+/// t-statistic 1.614 を出した。修正後 t = 4.169 で強い実証になった経緯あり。
+/// 詳細は PAPER §5.12.3a 参照。
 pub fn cosine_similarity(a: &[f64], b: &[f64]) -> f64 {
+    assert_eq!(a.len(), b.len(),
+        "cosine_similarity: dimension mismatch ({} vs {}). \
+         Past bug: spontaneous fp vs response fp had different bin counts. \
+         See PAPER §5.12.3a", a.len(), b.len());
     let dot: f64 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
     let na: f64 = a.iter().map(|x| x * x).sum::<f64>().sqrt();
     let nb: f64 = b.iter().map(|x| x * x).sum::<f64>().sqrt();

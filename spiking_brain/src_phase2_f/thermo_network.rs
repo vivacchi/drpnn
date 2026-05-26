@@ -652,16 +652,24 @@ mod tests {
 
     #[test]
     fn build_small_network() {
+        // 配置ロジック整合性 (PAPER §5.9.1):
+        //   n_input == grid_w (上端 1 行)
+        //   n_output == grid_w * 2 (下端 2 行)
+        //   内部充填: (grid_h - 3) * grid_w == (n_exc - n_output) + n_inh
         let mut cfg = ThermoNetworkConfig::default();
         cfg.grid_width = 10;
         cfg.grid_height = 10;
-        cfg.n_input = 5;
-        cfg.n_output = 10;
-        cfg.n_excitatory = 60;
-        cfg.n_inhibitory = 15;
+        cfg.n_input = 10;            // = grid_w
+        cfg.n_output = 20;           // = grid_w * 2
+        // 内部 = (10-3) * 10 = 70 セル
+        // 内部 = (n_exc - n_output) + n_inh = (n_exc - 20) + n_inh = 70
+        // 抑制比 20%: n_inh = 14 → n_exc = 76 (20 出力 + 56 内部)
+        cfg.n_excitatory = 76;
+        cfg.n_inhibitory = 14;
         cfg.input_fanout = 10;
         let net = ThermoNetwork::new(cfg);
-        assert!(net.n_neurons() >= 5 + 60 + 15);
+        // grid 完全充填: 10 + 76 + 14 = 100 = 10*10
+        assert_eq!(net.n_neurons(), 100);
         assert!(net.n_synapses() > 0);
     }
 }

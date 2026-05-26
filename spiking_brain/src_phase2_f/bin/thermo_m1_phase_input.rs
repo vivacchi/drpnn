@@ -119,10 +119,15 @@ fn present_phase_rotation(
     out_log
 }
 
-fn fingerprint_from_log(log: &[(usize, f64)], n_out: usize, t_end: f64, tau: f64) -> Vec<f64> {
-    let mut tr = OutputTrace::new(n_out, tau);
+/// 時間 bin 化 fingerprint (PAPER §5.9 で確立した正しい指標、聴覚モデル向け).
+/// 2026-05-25: 旧 `tr.fingerprint(t_end)` (時間平滑化、tau=50ms) から切替。
+/// thermo_m1_evaluation.rs / m0_m1_pipeline.rs / internal_state_probe.rs と統一。
+/// 過去の C10 (4 位相ローテーション) 結果は旧評価 (時間平滑化) なので、新評価と直接比較不可。
+const FINGERPRINT_BIN_WIDTH_MS: f64 = 10.0;
+fn fingerprint_from_log(log: &[(usize, f64)], n_out: usize, t_end: f64, _tau: f64) -> Vec<f64> {
+    let mut tr = OutputTrace::new(n_out, 50.0);
     for &(oi, t) in log { tr.record_spike(oi, t); }
-    tr.fingerprint(t_end)
+    tr.time_binned_fingerprint(t_end, FINGERPRINT_BIN_WIDTH_MS)
 }
 
 struct EvalResult {

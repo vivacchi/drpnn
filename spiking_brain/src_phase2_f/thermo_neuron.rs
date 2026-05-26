@@ -295,9 +295,14 @@ mod tests {
         let fired = n.update(100, 0);
         assert!(fired);
         assert_eq!(n.membrane, 0);
-        assert_eq!(n.available_enthalpy, 10);  // 1 引かれた後 1 回復 = 10
+        // G-1: enthalpy 初期 10 で enthalpy_max=10 のため (3) の回復をスキップ、
+        //      (5) で -3 → 7。 回復 +1 は次 step で起こる
+        assert_eq!(n.available_enthalpy, 7, "G-1: 初期 enthalpy=enthalpy_max なので回復スキップ、発火で -3");
         assert_eq!(n.local_entropy, 10);
-        assert_eq!(n.refractory_remaining, 4);
+        // G-1: refractory_remaining 機構撤廃 (常に 0、emergent な不応期)
+        assert_eq!(n.refractory_remaining, 0, "G-1: refractory_remaining 撤廃済");
+        // 発火痕跡は CAUSAL_WINDOW=160 にセット
+        assert_eq!(n.spike_trace, 160, "B4: spike_trace に痕跡 160");
     }
 
     #[test]
