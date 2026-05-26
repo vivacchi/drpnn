@@ -48,3 +48,11 @@ pub mod phase2_e;
 //   4. LTD 廃止 (LTP のみ能動、自己強化型分岐)
 #[path = "../src_phase2_f/mod.rs"]
 pub mod phase2_f;
+
+// Phase 3: 3D HCP 配置版 M1
+//   - 5×6×22 = 660 セル (柱状)
+//   - HCP 12 等距離近傍 (z 偶奇オフセット)
+//   - 物理プロセスは Phase 2 fork F と完全同一 (近傍トポロジーと配置のみ変更)
+//   - 2D vs 3D の並行比較で「物理空間次元が学習結果に与える影響」を検証
+#[path = "../src_phase3_3d/mod.rs"]
+pub mod phase3_3d;

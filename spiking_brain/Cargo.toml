@@ -101,3 +101,8 @@ path = "src_phase2_f/bin/internal_state_probe.rs"
 [[bin]]
 name = "m0_m1_m2_pipeline"
 path = "src_phase2_f/bin/m0_m1_m2_pipeline.rs"
+
+# Phase 3: M0 蝸牛 → M1 3D HCP 配置版 パイプライン (2D 版との直接比較用)
+[[bin]]
+name = "m0_m1_3d_pipeline"
+path = "src_phase3_3d/bin/m0_m1_3d_pipeline.rs"
