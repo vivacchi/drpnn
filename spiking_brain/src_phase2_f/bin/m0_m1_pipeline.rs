@@ -209,7 +209,9 @@ fn main() {
     println!("  M1: Fork F-G1-R1 v2 (8 近傍, 1セル1ニューロン)");
     println!("  評価: 時間 bin 化 fingerprint (40 出力 × 30 bin)");
 
-    let cfg = ThermoNetworkConfig::default();
+    let mut cfg = ThermoNetworkConfig::default();
+    cfg.enable_up_down = true;  // §5.12.7-A 適用
+    println!("  UP/DOWN 状態: 有効 (up_offset=20, period 100-300ms 個体差)");
     let cfg_for_print = cfg.clone();
     let mut net = ThermoNetwork::new(cfg);
     let mut cochlea = Cochlea::new();
@@ -288,13 +290,98 @@ fn main() {
         }
     }
 
-    // ─── Phase 3: POST 評価 ───
-    println!("\n== Phase 3: 訓練後評価 ==");
-    evaluate(&mut net, &mut cochlea, &syllables, &waveforms, n_sample, "POST");
+    // ─── Phase 3: POST 評価 (出力 layer) ───
+    println!("\n== Phase 3: 訓練後評価 (出力 layer 40) ==");
+    evaluate(&mut net, &mut cochlea, &syllables, &waveforms, n_sample, "POST (output)");
+
+    // ─── Phase 3b: 内部 layer 評価 (§5.12.3a で発見した上澄み問題への対処) ───
+    println!("\n══════════════════════════════════════════════════════════");
+    println!("== Phase 3b: 内部 420 ニューロン全体での再評価 ==");
+    println!("══════════════════════════════════════════════════════════");
+    evaluate_internal(&mut net, &mut cochlea, &syllables, &waveforms, n_sample);
 
     println!("\n══════════════════════════════════════════════════════════");
     println!("  M0+M1 音素識別サマリ");
     println!("  軸索成長 累積={} 刈り取り累積={}", net.axons_grown, net.axons_pruned);
     println!("  open シナプス: {}/{}", net.n_open_synapses(), net.n_synapses());
     println!("  CSV: phase2_f_phoneme_snapshots.csv");
+}
+
+// ─────────────────────────────────────────────────
+// 内部 layer (420 ニューロン全体) での評価
+// §5.12.3a で発見した「出力 layer は上澄み」問題への対処
+// ─────────────────────────────────────────────────
+
+fn present_syllable_internal(
+    net: &mut ThermoNetwork,
+    cochlea: &mut Cochlea,
+    waveform: &[i32],
+    internal_idx_map: &std::collections::HashMap<usize, usize>,
+) -> (Vec<(usize, f64)>, i32) {
+    net.reset_trial_state();
+    cochlea.reset();
+    let trial_start = net.current_time;
+    let mut log: Vec<(usize, f64)> = Vec::new();
+
+    for step in 0..TRIAL_STEPS {
+        let s0 = step * SAMPLES_PER_STEP;
+        let mut samples = [0i32; SAMPLES_PER_STEP];
+        for i in 0..SAMPLES_PER_STEP {
+            let idx = s0 + i;
+            if idx < waveform.len() {
+                samples[i] = waveform[idx];
+            }
+        }
+        let ext = cochlea.process_step(&samples);
+        let fired = net.step(&ext);
+        for nid in fired {
+            if let Some(&internal_idx) = internal_idx_map.get(&nid) {
+                let t_rel = (net.current_time - trial_start) as f64 * DT_MS;
+                log.push((internal_idx, t_rel));
+            }
+        }
+    }
+    (log, trial_start)
+}
+
+fn evaluate_internal(
+    net: &mut ThermoNetwork,
+    cochlea: &mut Cochlea,
+    syllables: &[Syllable],
+    waveforms: &[Vec<i32>],
+    n_sample: usize,
+) {
+    // 内部ニューロン (入力以外) の idx マップ
+    let input_set: std::collections::HashSet<usize> =
+        net.input_neurons.iter().copied().collect();
+    let internal_ids: Vec<usize> = (0..net.n_neurons())
+        .filter(|i| !input_set.contains(i)).collect();
+    let internal_idx_map: std::collections::HashMap<usize, usize> = internal_ids.iter()
+        .enumerate().map(|(idx, &nid)| (nid, idx)).collect();
+    let n_internal = internal_ids.len();
+
+    println!("  内部ニューロン数: {}", n_internal);
+
+    let mut per_syl_fps: Vec<Vec<Vec<f64>>> =
+        vec![Vec::with_capacity(n_sample); syllables.len()];
+
+    for _ in 0..n_sample {
+        for (si, _syl) in syllables.iter().enumerate() {
+            let (log, _) = present_syllable_internal(
+                net, cochlea, &waveforms[si], &internal_idx_map);
+            // fingerprint (n_internal × 30 bin)
+            let mut tr = OutputTrace::new(n_internal, 50.0);
+            for &(internal_idx, t) in &log {
+                tr.record_spike(internal_idx, t);
+            }
+            let fp = tr.time_binned_fingerprint(TRIAL_DURATION_MS, FINGERPRINT_BIN_WIDTH_MS);
+            per_syl_fps[si].push(fp);
+        }
+    }
+
+    let (selectivity, within, between) = compute_selectivity(&per_syl_fps);
+    println!("  -- POST (internal 420) --");
+    println!("    selectivity   : {:.3}  (within {:.3} - between {:.3})",
+        selectivity, within, between);
+    println!("    fingerprint dim: {} × 30 bin = {}", n_internal, n_internal * 30);
 }
