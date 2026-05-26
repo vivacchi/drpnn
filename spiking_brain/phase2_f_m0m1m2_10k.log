@@ -1,0 +1,40 @@
+== M0+M1+M2 統合パイプライン (3 階層) ==
+  M0 蝸牛: 20 帯域 ERB
+  M1 A1  : 20→40 (Fork F-G1-R1 v2)
+  M2 A2  : 20→40 (M1 出力 40 を集約して 20 入力に)
+  集約則: M2 入力 i = M1 出力 {2i, 2i+1} の発火イベント
+  音素   : pa, ki, tu, se, mo
+
+  音節波形を生成中...
+
+  M1: neurons=440, synapses=16880
+  M2: neurons=440, synapses=16880
+
+== Phase 1: 訓練前評価 ==
+
+  -- PRE --
+    M1 出力 (40 ニューロン): selectivity=0.179 (within 0.326 - between 0.147)
+    M2 出力 (40 ニューロン): selectivity=0.062 (within 0.328 - between 0.266)
+
+== Phase 2: 訓練 10000 試行 ==
+  trial  1000: M1 open=17713 cond μ=5.0 | M2 open=17784 cond μ=5.0
+  trial  2000: M1 open=7489 cond μ=5.0 | M2 open=6678 cond μ=5.0
+  trial  3000: M1 open=7080 cond μ=5.0 | M2 open=6298 cond μ=5.0
+  trial  4000: M1 open=7080 cond μ=4.9 | M2 open=6298 cond μ=5.0
+  trial  5000: M1 open=7080 cond μ=4.9 | M2 open=6298 cond μ=5.0
+  trial  6000: M1 open=7018 cond μ=4.9 | M2 open=6298 cond μ=5.0
+  trial  7000: M1 open=6994 cond μ=4.8 | M2 open=6298 cond μ=5.0
+  trial  8000: M1 open=6994 cond μ=4.8 | M2 open=6298 cond μ=5.0
+  trial  9000: M1 open=6994 cond μ=4.8 | M2 open=6298 cond μ=5.0
+  trial 10000: M1 open=6580 cond μ=4.8 | M2 open=6298 cond μ=5.0
+
+== Phase 3: 訓練後評価 ==
+
+  -- POST --
+    M1 出力 (40 ニューロン): selectivity=0.254 (within 0.989 - between 0.736)
+    M2 出力 (40 ニューロン): selectivity=0.291 (within 0.996 - between 0.704)
+
+══════════════════════════════════════════════════════════
+  M0+M1+M2 統合サマリ
+  M1 軸索成長 834 刈り取り 11134 open 6580/17714
+  M2 軸索成長 904 刈り取り 11486 open 6298/17784
