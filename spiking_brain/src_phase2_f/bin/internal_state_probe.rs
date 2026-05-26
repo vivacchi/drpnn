@@ -32,8 +32,10 @@ const DT_MS: f64 = 0.5;
 const TRIAL_STEPS: usize = (TRIAL_DURATION_MS / DT_MS) as usize;  // 600
 const FINGERPRINT_BIN_WIDTH_MS: f64 = 10.0;
 const N_SAMPLE_RESPONSE: usize = 20;  // 各刺激への応答 sample 数
-const SPONTANEOUS_WINDOW_STEPS: usize = 200;  // 100 ms window
-const N_SPONTANEOUS_WINDOWS: usize = 50;
+// spontaneous window を trial と同じ 300ms にすることで、 fingerprint dim が
+// 刺激応答 fp と一致する (n_neuron × 30 bin) → 正しい cosine similarity 比較
+const SPONTANEOUS_WINDOW_STEPS: usize = 600;  // 300 ms window (TRIAL_DURATION_MS と同じ)
+const N_SPONTANEOUS_WINDOWS: usize = 30;       // 30 × 600 = 18000 step = 9 秒模擬
 const PULSE_WIDTH_MS: f64 = 4.0;
 const INPUT_CURRENT: i32 = 60;
 
@@ -555,6 +557,117 @@ fn main() {
         t_stat, max_mean, shuffle_max_mean);
     println!("  内部 380   : t = {:>6.3}, max_sim_mean = {:.4} (shuffle {:.4})",
         t_internal, int_max_mean, int_shuffle_mean);
+
+    // ─────────────────────────────────────────────────
+    // 厳密な帰無分布: 空間保存シャッフル
+    // ─────────────────────────────────────────────────
+    // 各 fp の「どのニューロンが何回発火したか」(空間分布) は保持し、
+    // 「どの時間 bin で発火したか」(時間順序) だけランダムに振り直す。
+    // これにより「時間構造の有無」が直接検定される。
+    println!("\n══════════════════════════════════════════════════════════");
+    println!("== 厳密な帰無分布: 空間保存シャッフル (内部 420 のみ) ==");
+    println!("══════════════════════════════════════════════════════════");
+
+    let n_bins = (TRIAL_DURATION_MS / FINGERPRINT_BIN_WIDTH_MS) as usize;  // 30
+    let mut spatial_shuffle_max_sims: Vec<f64> = Vec::new();
+    let mut shuffle_rng3 = StdRng::seed_from_u64(789);
+
+    for fp in &active_internal {
+        // 各ニューロン (= n_internal 個の連続 n_bins) について、その bin 内の値を
+        // 時間軸でシャッフルする
+        let mut shuffled = vec![0.0f64; fp.len()];
+        for nid in 0..n_internal {
+            // このニューロンの bin スライス
+            let start = nid * n_bins;
+            // 元の値を集計 (空間分布として保持される総活動量)
+            let total: f64 = (0..n_bins).map(|b| fp[start + b]).sum();
+            let int_total = total as usize;
+            // ランダムに bin に再配置 (空間分布は維持)
+            for _ in 0..int_total {
+                let b = shuffle_rng3.gen_range(0..n_bins);
+                shuffled[start + b] += 1.0;
+            }
+        }
+        let best_sim = internal_centroids.iter()
+            .map(|c| cosine_similarity(&shuffled, c))
+            .fold(f64::NEG_INFINITY, f64::max);
+        spatial_shuffle_max_sims.push(best_sim);
+    }
+    let sp_shuffle_mean = spatial_shuffle_max_sims.iter().sum::<f64>()
+        / spatial_shuffle_max_sims.len() as f64;
+    let t_spatial = welch_t2(&int_max_sims, &spatial_shuffle_max_sims);
+
+    println!("  空間保存シャッフル max sim 平均: {:.4} (元の sim {:.4})",
+        sp_shuffle_mean, int_max_mean);
+    println!("  Welch t-statistic (内部 vs 空間保存): t = {:.3}", t_spatial);
+    if t_spatial > 3.0 {
+        println!("    → 強く有意 (p<0.001): 自発活動の時間構造が刺激パターンと整合 ✓");
+        println!("    → Kenet 2003 内部状態レパートリを定量的に実証");
+    } else if t_spatial > 2.0 {
+        println!("    → 有意 (p<0.05): 時間構造に方向性あり");
+    } else if t_spatial > 1.0 {
+        println!("    → 弱い傾向: 時間構造に部分的方向性");
+    } else {
+        println!("    → 有意差なし: 自発活動の時間構造はランダム");
+    }
+
+    // ─────────────────────────────────────────────────
+    // 状態遷移行列: 連続 window 間で best パターンが推移するか
+    // ─────────────────────────────────────────────────
+    println!("\n══════════════════════════════════════════════════════════");
+    println!("== 状態遷移行列: Kenet 2003 「数百ミリ秒おきの状態推移」検定 ==");
+    println!("══════════════════════════════════════════════════════════");
+
+    let mut sequential_best: Vec<usize> = Vec::new();
+    for fp in &internal_spont_fps {
+        if fp.iter().any(|&v| v > 0.0) {
+            let (best_idx, _) = internal_centroids.iter().enumerate()
+                .map(|(pi, c)| (pi, cosine_similarity(fp, c)))
+                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+                .unwrap();
+            sequential_best.push(best_idx);
+        }
+    }
+    println!("  連続 window の best パターン推移: {:?}", sequential_best);
+
+    let n_pat = patterns.len();
+    let mut trans_matrix = vec![vec![0u32; n_pat]; n_pat];
+    let mut same_count = 0u32;
+    let mut diff_count = 0u32;
+    for w in 1..sequential_best.len() {
+        let from = sequential_best[w-1];
+        let to = sequential_best[w];
+        trans_matrix[from][to] += 1;
+        if from == to { same_count += 1; } else { diff_count += 1; }
+    }
+    let total_trans = same_count + diff_count;
+    let same_rate = if total_trans > 0 { same_count as f64 / total_trans as f64 } else { 0.0 };
+    let diff_rate = if total_trans > 0 { diff_count as f64 / total_trans as f64 } else { 0.0 };
+
+    println!("\n  状態遷移率:");
+    println!("    同じ状態維持: {} / {} ({:.1}%)", same_count, total_trans, same_rate*100.0);
+    println!("    別状態推移  : {} / {} ({:.1}%)", diff_count, total_trans, diff_rate*100.0);
+    let expected_diff_rate = (n_pat as f64 - 1.0) / n_pat as f64;
+    println!("    期待 (一様分布): {:.1}%", expected_diff_rate * 100.0);
+
+    if diff_rate > 0.7 {
+        println!("    → 頻繁に状態推移 (Kenet 2003「数百ミリ秒おきに推移」と整合) ✓");
+    } else if diff_rate > 0.4 {
+        println!("    → 中程度の状態推移");
+    } else {
+        println!("    → 主に同じ状態維持 (リミットサイクル傾向)");
+    }
+
+    print!("\n  遷移行列 (from -> to):\n      ");
+    for (l, _) in patterns.iter() { print!("  {} ", l); }
+    println!();
+    for (i, (l, _)) in patterns.iter().enumerate() {
+        print!("   {} :", l);
+        for j in 0..n_pat {
+            print!(" {:>3}", trans_matrix[i][j]);
+        }
+        println!();
+    }
 }
 
 /// 内部ニューロン版の window fingerprint.
