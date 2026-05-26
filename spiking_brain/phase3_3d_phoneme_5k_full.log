@@ -1,0 +1,221 @@
+warning: unused import: `GROWTH_THRESHOLD`
+ --> src\..\src_phase2\thermo_network.rs:7:45
+  |
+7 |     axon_growth_step, build_position_index, GROWTH_THRESHOLD,
+  |                                             ^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `VecDeque`
+  --> src\..\src_phase2\thermo_network.rs:14:33
+   |
+14 | use std::collections::{HashMap, VecDeque};
+   |                                 ^^^^^^^^
+
+warning: unused import: `GROWTH_THRESHOLD`
+ --> src\..\src_phase2_a\thermo_network.rs:7:45
+  |
+7 |     axon_growth_step, build_position_index, GROWTH_THRESHOLD,
+  |                                             ^^^^^^^^^^^^^^^^
+
+warning: unused import: `VecDeque`
+  --> src\..\src_phase2_a\thermo_network.rs:14:33
+   |
+14 | use std::collections::{HashMap, VecDeque};
+   |                                 ^^^^^^^^
+
+warning: unused import: `GROWTH_THRESHOLD`
+ --> src\..\src_phase2_b\thermo_network.rs:7:45
+  |
+7 |     axon_growth_step, build_position_index, GROWTH_THRESHOLD,
+  |                                             ^^^^^^^^^^^^^^^^
+
+warning: unused import: `VecDeque`
+  --> src\..\src_phase2_b\thermo_network.rs:14:33
+   |
+14 | use std::collections::{HashMap, VecDeque};
+   |                                 ^^^^^^^^
+
+warning: unused import: `GROWTH_THRESHOLD`
+ --> src\..\src_phase2_c\thermo_network.rs:7:45
+  |
+7 |     axon_growth_step, build_position_index, GROWTH_THRESHOLD,
+  |                                             ^^^^^^^^^^^^^^^^
+
+warning: unused import: `VecDeque`
+  --> src\..\src_phase2_c\thermo_network.rs:14:33
+   |
+14 | use std::collections::{HashMap, VecDeque};
+   |                                 ^^^^^^^^
+
+warning: unused import: `GROWTH_THRESHOLD`
+ --> src\..\src_phase2_d\thermo_network.rs:7:45
+  |
+7 |     axon_growth_step, build_position_index, GROWTH_THRESHOLD,
+  |                                             ^^^^^^^^^^^^^^^^
+
+warning: unused import: `OPEN_THRESHOLD`
+  --> src\..\src_phase2_d\thermo_network.rs:10:44
+   |
+10 | use super::thermo_synapse::{ThermoSynapse, OPEN_THRESHOLD};
+   |                                            ^^^^^^^^^^^^^^
+
+warning: unused import: `VecDeque`
+  --> src\..\src_phase2_d\thermo_network.rs:14:33
+   |
+14 | use std::collections::{HashMap, VecDeque};
+   |                                 ^^^^^^^^
+
+warning: unused import: `GROWTH_THRESHOLD`
+ --> src\..\src_phase2_e\thermo_network.rs:7:45
+  |
+7 |     axon_growth_step, build_position_index, GROWTH_THRESHOLD,
+  |                                             ^^^^^^^^^^^^^^^^
+
+warning: unused import: `VecDeque`
+  --> src\..\src_phase2_e\thermo_network.rs:14:33
+   |
+14 | use std::collections::{HashMap, VecDeque};
+   |                                 ^^^^^^^^
+
+warning: unused import: `GROWTH_THRESHOLD`
+ --> src\..\src_phase2_f\thermo_network.rs:7:45
+  |
+7 |     axon_growth_step, build_position_index, GROWTH_THRESHOLD,
+  |                                             ^^^^^^^^^^^^^^^^
+
+warning: unused import: `VecDeque`
+  --> src\..\src_phase2_f\thermo_network.rs:14:33
+   |
+14 | use std::collections::{HashMap, VecDeque};
+   |                                 ^^^^^^^^
+
+warning: method `accumulate_eligibility` is never used
+   --> src\network.rs:393:8
+    |
+124 | impl Network {
+    | ------------ method in this implementation
+...
+393 |     fn accumulate_eligibility(&mut self, s_idx: usize, delta: f64) {
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `is_inh` is never read
+   --> src\binary_network.rs:162:5
+    |
+148 | pub struct BinaryNetwork {
+    |            ------------- field in this struct
+...
+162 |     is_inh: Vec<bool>,
+    |     ^^^^^^
+
+warning: method `accumulate_eligibility` is never used
+   --> src\binary_network.rs:366:8
+    |
+169 | impl BinaryNetwork {
+    | ------------------ method in this implementation
+...
+366 |     fn accumulate_eligibility(&mut self, s_idx: usize, delta: f32) {
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `spiking_brain` (lib) generated 18 warnings (run `cargo fix --lib -p spiking_brain` to apply 15 suggestions)
+    Finished `release` profile [optimized] target(s) in 0.19s
+     Running `target\release\m0_m1_3d_pipeline.exe 5000 80 full`
+== M0+M1 3D パイプライン: 音素 5 種識別 (HCP 12 近傍) ==
+  音素: pa, ki, tu, se, mo
+  M0: 20 帯域蝸牛 (ERB スケール 50Hz-4kHz)
+  M1 3D: grid 5×6×22 = 660 セル (柱状 HCP)
+    底面 z=0 (30): 入力 20 中央 + 内部 10
+    内部 z=1..20 (600): 興奮 500 + 抑制 110 (18%)
+    上面 z=21 (30): 出力 30 完全充填
+  評価: 時間 bin 化 fingerprint (30 出力 × 30 bin = 900 dim)
+  ★ input_fanout オーバーライド: 80 (デフォルト 80)
+  ★ overconnect_mode: FullPair (fanout=9999)
+  UP/DOWN 状態: 無効 (dense 入力では過剰刺激、§5.12.7-A)
+
+  音節波形を生成中...
+    pa: 3200 samples, RMS=4634
+    ki: 3200 samples, RMS=4609
+    tu: 3200 samples, RMS=4780
+    se: 3200 samples, RMS=7235
+    mo: 3200 samples, RMS=3391
+
+  ネットワーク:
+    neurons   : 660
+    synapses  : 342470 (open=342470)
+    fanout    : input=80, grid=5×6×22
+
+  z 層別ニューロン分布 (input/exc/inh):
+    z   | input | exc | inh | inh%
+    ----|-------|-----|-----|-----
+      0 |    20 |   8 |   2 | 20.0%
+      1 |     0 |  23 |   7 | 23.3%
+      2 |     0 |  20 |  10 | 33.3%
+      3 |     0 |  24 |   6 | 20.0%
+      4 |     0 |  25 |   5 | 16.7%
+      5 |     0 |  22 |   8 | 26.7%
+      6 |     0 |  26 |   4 | 13.3%
+      7 |     0 |  26 |   4 | 13.3%
+      8 |     0 |  22 |   8 | 26.7%
+      9 |     0 |  23 |   7 | 23.3%
+     10 |     0 |  25 |   5 | 16.7%
+     11 |     0 |  26 |   4 | 13.3%
+     12 |     0 |  27 |   3 | 10.0%
+     13 |     0 |  27 |   3 | 10.0%
+     14 |     0 |  25 |   5 | 16.7%
+     15 |     0 |  27 |   3 | 10.0%
+     16 |     0 |  23 |   7 | 23.3%
+     17 |     0 |  28 |   2 |  6.7%
+     18 |     0 |  25 |   5 | 16.7%
+     19 |     0 |  23 |   7 | 23.3%
+     20 |     0 |  25 |   5 | 16.7%
+     21 |     0 |  30 |   0 |  0.0%
+    合計内部 (出力含む): 530 興奮 + 110 抑制 = 640 (✓ 抑制比 17.2%)
+
+== Phase 1: 訓練前評価 ==
+
+  -- PRE --
+    selectivity   : -0.018  (within 0.151 - between 0.170)
+    active outputs: 30 / 30
+    hit /syllable : pa:30/30  ki:21/30  tu:21/30  se:21/30  mo:21/30  (across 20 samples)
+    total spikes  : pa:3271  ki:439  tu:629  se:507  mo:489  
+    出力スパイク時刻分布 (ms, 試行 0-300ms 内):
+      p10=52.5  p25=93.0  p50=179.5  p75=273.0  p90=288.5  mean=181.8  (n=5335)
+
+== Phase 2: 訓練 5000 試行 (音節ランダム選択) ==
+  snap_interval = 500
+    500  within=0.991  sel=0.483  act=21/30  ent_μ=784.0  cond_μ=27.5  open=343240  grown/pruned=770/0
+   1000  within=0.984  sel=0.474  act=21/30  ent_μ=791.4  cond_μ=27.5  open=343244  grown/pruned=774/0
+   1500  within=0.991  sel=0.479  act=21/30  ent_μ=795.0  cond_μ=27.5  open=343076  grown/pruned=775/169
+   2000  within=0.994  sel=0.482  act=21/30  ent_μ=796.9  cond_μ=27.5  open=342909  grown/pruned=775/336
+   2500  within=0.993  sel=0.481  act=21/30  ent_μ=797.5  cond_μ=27.5  open=342910  grown/pruned=776/336
+   3000  within=0.993  sel=0.481  act=21/30  ent_μ=798.0  cond_μ=27.5  open=256445  grown/pruned=776/86801
+   3500  within=0.997  sel=0.485  act=21/30  ent_μ=798.6  cond_μ=27.5  open=255806  grown/pruned=776/87440
+   4000  within=0.988  sel=0.474  act=21/30  ent_μ=798.8  cond_μ=27.5  open=255806  grown/pruned=776/87440
+   4500  within=1.000  sel=0.488  act=21/30  ent_μ=799.0  cond_μ=27.6  open=255807  grown/pruned=777/87440
+   5000  within=0.998  sel=0.487  act=21/30  ent_μ=799.0  cond_μ=27.6  open=255807  grown/pruned=777/87440
+
+== Phase 3: 訓練後評価 (出力 layer 30) ==
+
+  -- POST (output) --
+    selectivity   : 0.479  (within 0.992 - between 0.514)
+    active outputs: 21 / 30
+    hit /syllable : pa:21/30  ki:21/30  tu:21/30  se:21/30  mo:21/30  (across 20 samples)
+    total spikes  : pa:420  ki:440  tu:420  se:420  mo:820  
+    出力スパイク時刻分布 (ms, 試行 0-300ms 内):
+      p10=176.5  p25=183.5  p50=201.0  p75=210.5  p90=243.0  mean=204.8  (n=2520)
+
+══════════════════════════════════════════════════════════
+== Phase 3b: 内部 640 ニューロン全体での再評価 ==
+══════════════════════════════════════════════════════════
+  内部ニューロン数 (出力含む): 640
+  -- POST (internal 640) --
+    selectivity   : 0.389  (within 0.995 - between 0.605)
+    fingerprint dim: 640 × 30 bin = 19200
+
+══════════════════════════════════════════════════════════
+  M0+M1 3D 音素識別サマリ
+  軸索成長 累積=777 刈り取り累積=87440
+  open シナプス: 255807/343247
+  CSV: phase3_3d_phoneme_snapshots.csv
