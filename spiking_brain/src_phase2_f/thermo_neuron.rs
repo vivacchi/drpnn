@@ -1,12 +1,14 @@
-﻿//! 熱力学的ニューロン Fork F G-1 (発生学的・原理厳格版)
+﻿//! 熱力学的ニューロン Fork F G-1 (発生学的・原理厳格版、Tier 2 整理済 2026-05-25)
 //!
 //! G-1 の変更:
-//!   - refractory_remaining 撤廃 (絶対不応期廃止)
+//!   - 絶対不応期廃止 (refractory_remaining/_period フィールドも削除)
 //!   - 不応期は ENTHALPY_PER_SPIKE 消費 + 自然回復で emergent に発生
 //!   - 発火条件: enthalpy >= ENTHALPY_PER_SPIKE (= 3)
 //!   - 発火時: enthalpy -= 3
 //!   - 結果: enthalpy_max=10 で 4 回バースト発火可能 (10→7→4→1)
 //!           その後 2-3 step 不応期 (回復で再発火)
+//!
+//! UP/DOWN 状態追加 (§5.12.7-A、 sparse 入力時に有効、dense 入力では崩壊リスクあり)
 //!
 //! 物理プロセス (毎クロック):
 //!   1. spike_trace 減衰
@@ -32,8 +34,6 @@ pub struct ThermoNeuron {
     pub available_enthalpy: i32,
     /// 局所エントロピー (蓄積された熱、生物の細胞内代謝産物に対応)
     pub local_entropy: i32,
-    /// 不応期残りクロック
-    pub refractory_remaining: i32,
     /// 最終発火クロック (互換性のため保持、内部状態比較で使用)
     pub last_spike_time: i32,
     /// B4: スパイク痕跡カウンタ。発火時に CAUSAL_WINDOW にセット、毎クロック -1。
@@ -56,8 +56,6 @@ pub struct ThermoNeuron {
     pub entropy_decay_counter: i32,
     /// 発火 1 回で生じる局所エントロピー
     pub entropy_per_spike: i32,
-    /// 不応期長
-    pub refractory_period: i32,
     /// 抑制性か
     pub is_inhibitory: bool,
     /// 外部駆動ニューロン (入力層) は entropy 生成しない (パターン入力を壊さないため)
@@ -98,7 +96,6 @@ impl ThermoNeuron {
             membrane: 0,
             available_enthalpy: 10,
             local_entropy: 0,
-            refractory_remaining: 0,
             last_spike_time: i32::MIN,
             spike_trace: 0,
             threshold_base: 80,
@@ -108,7 +105,6 @@ impl ThermoNeuron {
             entropy_decay_interval: 50,
             entropy_decay_counter: 0,
             entropy_per_spike: 10,
-            refractory_period: 4,
             is_inhibitory: false,
             generates_entropy: true,
             spontaneous_input: 2, // デフォルト中央値、後で個体差で上書き
@@ -129,7 +125,6 @@ impl ThermoNeuron {
             membrane: 0,
             available_enthalpy: 10,
             local_entropy: 0,
-            refractory_remaining: 0,
             last_spike_time: i32::MIN,
             spike_trace: 0,
             threshold_base: 40,
@@ -139,7 +134,6 @@ impl ThermoNeuron {
             entropy_decay_interval: 50,
             entropy_decay_counter: 0,
             entropy_per_spike: 10,
-            refractory_period: 2,
             is_inhibitory: true,
             generates_entropy: true,
             spontaneous_input: 2,
@@ -172,7 +166,6 @@ impl ThermoNeuron {
             membrane: 0,
             available_enthalpy: 10,
             local_entropy: 0,
-            refractory_remaining: 0,
             last_spike_time: i32::MIN,
             spike_trace: 0,
             threshold_base: 30,
@@ -182,7 +175,6 @@ impl ThermoNeuron {
             entropy_decay_interval: 1,
             entropy_decay_counter: 0,
             entropy_per_spike: 0,
-            refractory_period: 2,
             is_inhibitory: false,
             generates_entropy: false,
             spontaneous_input: 2, // 検証中: 仮想 M0 等価性 (Step 0 結果の再解釈)
@@ -216,9 +208,8 @@ impl ThermoNeuron {
             }
         }
 
-        // G-1: refractory_remaining チェックは撤廃
+        // G-1: 絶対不応期撤廃 (refractory_remaining/_period フィールドも削除済 2026-05-25)
         // 不応期は ENTHALPY_PER_SPIKE 消費 + 自然回復で emergent に発生
-        // (refractory_remaining フィールド自体は構造体に残るが、常に 0)
 
         // (2) 膜電位の物理プロセス: 入力 + 自発活動 - リーク (+ UP 状態ブースト)
         //     - 外部/シナプス入力 (input_current)
@@ -264,7 +255,7 @@ impl ThermoNeuron {
                 self.local_entropy += self.entropy_per_spike;
             }
             self.membrane = 0;
-            // G-1: refractory_remaining は使わない (enthalpy 消費が不応期を emergent に作る)
+            // G-1: 絶対不応期なし、enthalpy 消費が不応期を emergent に作る
             self.last_spike_time = current_time;
             // B4: 発火痕跡を CAUSAL_WINDOW にセット (因果窓 step 数、thermo_synapse 定数と一致)
             self.spike_trace = 160;
@@ -277,7 +268,6 @@ impl ThermoNeuron {
     /// 状態リセット (試行間の状態クリア)
     pub fn reset_state(&mut self) {
         self.membrane = 0;
-        self.refractory_remaining = 0;
         self.last_spike_time = i32::MIN;
         self.spike_trace = 0; // B4: 試行間で痕跡もリセット
         // available_enthalpy と local_entropy は意図的に保持
@@ -299,8 +289,8 @@ mod tests {
         //      (5) で -3 → 7。 回復 +1 は次 step で起こる
         assert_eq!(n.available_enthalpy, 7, "G-1: 初期 enthalpy=enthalpy_max なので回復スキップ、発火で -3");
         assert_eq!(n.local_entropy, 10);
-        // G-1: refractory_remaining 機構撤廃 (常に 0、emergent な不応期)
-        assert_eq!(n.refractory_remaining, 0, "G-1: refractory_remaining 撤廃済");
+        // G-1: refractory_remaining/_period フィールド削除済 (2026-05-25 Tier 2 修正)
+        // 不応期は enthalpy 消費による emergent 機構
         // 発火痕跡は CAUSAL_WINDOW=160 にセット
         assert_eq!(n.spike_trace, 160, "B4: spike_trace に痕跡 160");
     }

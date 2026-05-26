@@ -97,11 +97,13 @@ fn networks_equal(a: &ThermoNetwork, b: &ThermoNetwork) -> Result<(), String> {
         if na.local_entropy != nb.local_entropy {
             return Err(format!("neuron[{i}].local_entropy differs: {} vs {}", na.local_entropy, nb.local_entropy));
         }
-        if na.refractory_remaining != nb.refractory_remaining {
-            return Err(format!("neuron[{i}].refractory_remaining differs", ));
-        }
+        // G-1: refractory_remaining 削除済 (2026-05-25 Tier 2)
         if na.last_spike_time != nb.last_spike_time {
             return Err(format!("neuron[{i}].last_spike_time differs: {} vs {}", na.last_spike_time, nb.last_spike_time));
+        }
+        // spike_trace も決定論性のキー (B4 で導入)
+        if na.spike_trace != nb.spike_trace {
+            return Err(format!("neuron[{i}].spike_trace differs: {} vs {}", na.spike_trace, nb.spike_trace));
         }
     }
     // シナプス詳細比較
@@ -109,8 +111,9 @@ fn networks_equal(a: &ThermoNetwork, b: &ThermoNetwork) -> Result<(), String> {
         if sa.conductance != sb.conductance {
             return Err(format!("synapse[{i}].conductance differs: {} vs {}", sa.conductance, sb.conductance));
         }
-        if sa.exists != sb.exists {
-            return Err(format!("synapse[{i}].exists differs: {} vs {}", sa.exists, sb.exists));
+        // F-fix: exists フィールド削除済 (alive のみで判定、PAPER §5.10 関連)
+        if sa.alive != sb.alive {
+            return Err(format!("synapse[{i}].alive differs: {} vs {}", sa.alive, sb.alive));
         }
         if sa.decay_counter != sb.decay_counter {
             return Err(format!("synapse[{i}].decay_counter differs: {} vs {}", sa.decay_counter, sb.decay_counter));

@@ -1,16 +1,21 @@
-//! 熱力学的シナプス Fork F (発生学的・原理厳格版)
+//! 熱力学的シナプス Fork F-G1-R1 (発生学的・原理厳格版、Tier 2 整理済 2026-05-25)
 //!
 //! Fork F の核心変更:
 //!   1. is_inhibitory 削除 (デールの原則: pre neuron の属性を継承)
 //!   2. plastic 削除 (全シナプス可塑性、固定/可塑の区別なし)
 //!   3. vitality 追加 (構造的可塑性: 使用頻度ベースの存続)
-//!   4. LTD 関連メソッド削除 (LTP のみ能動、自己強化型分岐)
+//!   4. exists 削除 (F-fix: 信号配送は alive のみで判定、conductance は強度のみ)
+//!
+//! R1 の追加:
+//!   - LTD 復活 (反因果ペアで弱化、Bi & Poo 1998 / Song et al. 2000)
+//!   - LTD_AMOUNT > LTP_AMOUNT で安定 (シナプス強度の発散を防ぐ)
 //!
 //! 2 層の可塑性 (生物学的に分離):
-//!   - 機能的可塑性 (短中期): conductance, exists (STDP で変化)
+//!   - 機能的可塑性 (短中期): conductance (STDP +/- で変化、0-100)
 //!   - 構造的可塑性 (長期): vitality, alive (使用頻度ベース)
 //!
-//! 信号オン/オフ判定: exists && alive で信号配送する
+//! 信号オン/オフ判定 (F-fix): alive のみで判定
+//!   conductance は信号強度のアナログ多値 (低くても弱信号は流れる)
 
 /// 因果窓 (step 単位、0.5ms/step → 80ms = 160 step)
 pub const CAUSAL_WINDOW: i32 = 160;
