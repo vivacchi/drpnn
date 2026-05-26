@@ -58,6 +58,39 @@ pub struct ThermoNetwork3dConfig {
     pub overconnect_fanout: usize,
 }
 
+impl ThermoNetwork3dConfig {
+    /// 指定 grid 寸法から派生する設定 (抑制比 18%、 配置ルールは default と同じ)
+    ///   - 入力: 底面 z=0 中央 grid_w × (grid_h - 2) セル
+    ///   - 内部底面: z=0 の y=0 / y=grid_h-1 (2 × grid_w セル)
+    ///   - 内部中層: z=1..grid_d-1 全体 (grid_w × grid_h × (grid_d - 2) セル)
+    ///   - 出力: 上面 z=grid_d-1 完全充填 (grid_w × grid_h セル)
+    /// 例: for_grid(5, 6, 22) → 660 セル (デフォルト相当)
+    ///     for_grid(5, 6, 11) → 330 セル (柱半分、 E-2 用)
+    pub fn for_grid(grid_w: i32, grid_h: i32, grid_d: i32) -> Self {
+        assert!(grid_w >= 3 && grid_h >= 3 && grid_d >= 3,
+            "grid 寸法は各軸 3 以上が必要");
+        let n_input = (grid_w * (grid_h - 2)) as usize;
+        let n_output = (grid_w * grid_h) as usize;
+        let total = (grid_w * grid_h * grid_d) as usize;
+        let internal = total - n_input - n_output;
+        // 抑制 18% (四捨五入)
+        let n_inhibitory = ((internal as f64) * 0.18).round() as usize;
+        let n_excitatory = n_output + (internal - n_inhibitory);
+        Self {
+            grid_w, grid_h, grid_d,
+            n_input, n_output, n_excitatory, n_inhibitory,
+            input_fanout: 80,
+            delay_range: (2, 40),
+            seed: 300,
+            axon_growth_interval: GROWTH_INTERVAL,
+            dt_ms: 0.5,
+            enable_up_down: false,
+            overconnect_mode: OverconnectMode::Random,
+            overconnect_fanout: 40,
+        }
+    }
+}
+
 impl Default for ThermoNetwork3dConfig {
     fn default() -> Self {
         // 5×6×22 = 660、 入力 20、 出力 30、 内部 610
@@ -160,7 +193,8 @@ impl ThermoNetwork3d {
             bottom_internal_positions.push((x, 0, 0));
             bottom_internal_positions.push((x, config.grid_h - 1, 0));
         }
-        assert_eq!(bottom_internal_positions.len(), 10);
+        let expected_bottom_internal = (2 * config.grid_w) as usize;
+        assert_eq!(bottom_internal_positions.len(), expected_bottom_internal);
 
         let mut middle_internal_positions: Vec<(i32, i32, i32)> = Vec::new();
         for z in 1..(config.grid_d - 1) {
@@ -170,7 +204,9 @@ impl ThermoNetwork3d {
                 }
             }
         }
-        assert_eq!(middle_internal_positions.len(), 600);
+        let expected_middle_internal =
+            ((config.grid_d - 2) * config.grid_h * config.grid_w) as usize;
+        assert_eq!(middle_internal_positions.len(), expected_middle_internal);
 
         let mut internal_positions: Vec<(i32, i32, i32)> = Vec::new();
         internal_positions.extend(bottom_internal_positions.iter().copied());

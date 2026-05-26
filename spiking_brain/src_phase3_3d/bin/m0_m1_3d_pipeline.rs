@@ -270,6 +270,10 @@ fn main() {
             "full" => (OverconnectMode::FullPair, 9999),  // 9999 = 候補プール上限まで使う
             _ => (OverconnectMode::Random, 40),
         };
+    // CLI 第 4 引数: grid_d (柱の高さ、 E-2 用)
+    // 省略時はデフォルト 22 (660 セル)。 11 で柱半分 (330 セル、 経路長半減)。
+    let grid_d_override: Option<i32> = std::env::args().nth(4)
+        .and_then(|s| s.parse().ok());
 
     let n_sample: usize = 20;
     let snap_interval: usize = if n_train >= 100_000 {
@@ -289,7 +293,14 @@ fn main() {
     println!("    上面 z=21 (30): 出力 30 完全充填");
     println!("  評価: 時間 bin 化 fingerprint (30 出力 × 30 bin = 900 dim)");
 
-    let mut cfg = ThermoNetwork3dConfig::default();
+    // grid_d 指定があれば for_grid で派生、 なければ default (5×6×22)
+    let mut cfg = match grid_d_override {
+        Some(gd) => {
+            println!("  ★ grid_d オーバーライド: {} (デフォルト 22)", gd);
+            ThermoNetwork3dConfig::for_grid(5, 6, gd)
+        }
+        None => ThermoNetwork3dConfig::default(),
+    };
     if let Some(fanout) = input_fanout_override {
         cfg.input_fanout = fanout;
         println!("  ★ input_fanout オーバーライド: {} (デフォルト 80)", fanout);
