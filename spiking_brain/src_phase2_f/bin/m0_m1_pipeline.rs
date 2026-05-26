@@ -209,9 +209,10 @@ fn main() {
     println!("  M1: Fork F-G1-R1 v2 (8 近傍, 1セル1ニューロン)");
     println!("  評価: 時間 bin 化 fingerprint (40 出力 × 30 bin)");
 
-    let mut cfg = ThermoNetworkConfig::default();
-    cfg.enable_up_down = true;  // §5.12.7-A 適用
-    println!("  UP/DOWN 状態: 有効 (up_offset=20, period 100-300ms 個体差)");
+    let cfg = ThermoNetworkConfig::default();
+    // UP/DOWN は dense 音素入力では崩壊する (POST -0.009、§5.12.7-A 条件付き)
+    // → m0_m1_pipeline では OFF (sparse 入力向け M1 単体実験でのみ有効)
+    println!("  UP/DOWN 状態: 無効 (dense 入力では過剰刺激になる、§5.12.7-A 検証結果)");
     let cfg_for_print = cfg.clone();
     let mut net = ThermoNetwork::new(cfg);
     let mut cochlea = Cochlea::new();
