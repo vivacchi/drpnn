@@ -1,0 +1,212 @@
+warning: unused import: `GROWTH_THRESHOLD`
+ --> src\..\src_phase2\thermo_network.rs:7:45
+  |
+7 |     axon_growth_step, build_position_index, GROWTH_THRESHOLD,
+  |                                             ^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `VecDeque`
+  --> src\..\src_phase2\thermo_network.rs:14:33
+   |
+14 | use std::collections::{HashMap, VecDeque};
+   |                                 ^^^^^^^^
+
+warning: unused import: `GROWTH_THRESHOLD`
+ --> src\..\src_phase2_a\thermo_network.rs:7:45
+  |
+7 |     axon_growth_step, build_position_index, GROWTH_THRESHOLD,
+  |                                             ^^^^^^^^^^^^^^^^
+
+warning: unused import: `VecDeque`
+  --> src\..\src_phase2_a\thermo_network.rs:14:33
+   |
+14 | use std::collections::{HashMap, VecDeque};
+   |                                 ^^^^^^^^
+
+warning: unused import: `GROWTH_THRESHOLD`
+ --> src\..\src_phase2_b\thermo_network.rs:7:45
+  |
+7 |     axon_growth_step, build_position_index, GROWTH_THRESHOLD,
+  |                                             ^^^^^^^^^^^^^^^^
+
+warning: unused import: `VecDeque`
+  --> src\..\src_phase2_b\thermo_network.rs:14:33
+   |
+14 | use std::collections::{HashMap, VecDeque};
+   |                                 ^^^^^^^^
+
+warning: unused import: `GROWTH_THRESHOLD`
+ --> src\..\src_phase2_c\thermo_network.rs:7:45
+  |
+7 |     axon_growth_step, build_position_index, GROWTH_THRESHOLD,
+  |                                             ^^^^^^^^^^^^^^^^
+
+warning: unused import: `VecDeque`
+  --> src\..\src_phase2_c\thermo_network.rs:14:33
+   |
+14 | use std::collections::{HashMap, VecDeque};
+   |                                 ^^^^^^^^
+
+warning: unused import: `GROWTH_THRESHOLD`
+ --> src\..\src_phase2_d\thermo_network.rs:7:45
+  |
+7 |     axon_growth_step, build_position_index, GROWTH_THRESHOLD,
+  |                                             ^^^^^^^^^^^^^^^^
+
+warning: unused import: `OPEN_THRESHOLD`
+  --> src\..\src_phase2_d\thermo_network.rs:10:44
+   |
+10 | use super::thermo_synapse::{ThermoSynapse, OPEN_THRESHOLD};
+   |                                            ^^^^^^^^^^^^^^
+
+warning: unused import: `VecDeque`
+  --> src\..\src_phase2_d\thermo_network.rs:14:33
+   |
+14 | use std::collections::{HashMap, VecDeque};
+   |                                 ^^^^^^^^
+
+warning: unused import: `GROWTH_THRESHOLD`
+ --> src\..\src_phase2_e\thermo_network.rs:7:45
+  |
+7 |     axon_growth_step, build_position_index, GROWTH_THRESHOLD,
+  |                                             ^^^^^^^^^^^^^^^^
+
+warning: unused import: `VecDeque`
+  --> src\..\src_phase2_e\thermo_network.rs:14:33
+   |
+14 | use std::collections::{HashMap, VecDeque};
+   |                                 ^^^^^^^^
+
+warning: unused import: `GROWTH_THRESHOLD`
+ --> src\..\src_phase2_f\thermo_network.rs:7:45
+  |
+7 |     axon_growth_step, build_position_index, GROWTH_THRESHOLD,
+  |                                             ^^^^^^^^^^^^^^^^
+
+warning: unused import: `VecDeque`
+  --> src\..\src_phase2_f\thermo_network.rs:14:33
+   |
+14 | use std::collections::{HashMap, VecDeque};
+   |                                 ^^^^^^^^
+
+warning: method `accumulate_eligibility` is never used
+   --> src\network.rs:393:8
+    |
+124 | impl Network {
+    | ------------ method in this implementation
+...
+393 |     fn accumulate_eligibility(&mut self, s_idx: usize, delta: f64) {
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `is_inh` is never read
+   --> src\binary_network.rs:162:5
+    |
+148 | pub struct BinaryNetwork {
+    |            ------------- field in this struct
+...
+162 |     is_inh: Vec<bool>,
+    |     ^^^^^^
+
+warning: method `accumulate_eligibility` is never used
+   --> src\binary_network.rs:366:8
+    |
+169 | impl BinaryNetwork {
+    | ------------------ method in this implementation
+...
+366 |     fn accumulate_eligibility(&mut self, s_idx: usize, delta: f32) {
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variable `zN_w` should have a snake case name
+   --> src\..\src_phase3_3d\thermo_network_3d.rs:112:14
+    |
+112 |         let (zN_w, zN_h) = layer_grids[(grid_d - 1) as usize];
+    |              ^^^^ help: convert the identifier to snake case: `z_n_w`
+    |
+    = note: `#[warn(non_snake_case)]` (part of `#[warn(nonstandard_style)]`) on by default
+
+warning: variable `zN_h` should have a snake case name
+   --> src\..\src_phase3_3d\thermo_network_3d.rs:112:20
+    |
+112 |         let (zN_w, zN_h) = layer_grids[(grid_d - 1) as usize];
+    |                    ^^^^ help: convert the identifier to snake case: `z_n_h`
+
+warning: variable `zN_w` should have a snake case name
+   --> src\..\src_phase3_3d\thermo_network_3d.rs:318:22
+    |
+318 |                 let (zN_w, zN_h) = layer_grids[(config.grid_d - 1) as usize];
+    |                      ^^^^ help: convert the identifier to snake case: `z_n_w`
+
+warning: variable `zN_h` should have a snake case name
+   --> src\..\src_phase3_3d\thermo_network_3d.rs:318:28
+    |
+318 |                 let (zN_w, zN_h) = layer_grids[(config.grid_d - 1) as usize];
+    |                            ^^^^ help: convert the identifier to snake case: `z_n_h`
+
+warning: `spiking_brain` (lib) generated 22 warnings (run `cargo fix --lib -p spiking_brain` to apply 15 suggestions)
+    Finished `release` profile [optimized] target(s) in 0.07s
+     Running `target\release\m0_m1_dram_pipeline.exe 5000 20`
+== M0+M1 DRAM 物理モデル パイプライン: 音素 5 種識別 ==
+  音素: pa, ki, tu, se, mo
+  M0: 20 帯域蝸牛 (Phase 2 と共通)
+  M1: DRAM 物理モデル (Vth ばらつき + 個別セル書き込み + PWM 重み + ringbuffer)
+  ★ input_scale: 20 (cochlea 出力 × 20 = DRAM charge)
+
+  音節波形を生成中...
+    pa: 3200 samples, RMS=4634
+    ki: 3200 samples, RMS=4609
+    tu: 3200 samples, RMS=4780
+    se: 3200 samples, RMS=7235
+    mo: 3200 samples, RMS=3391
+
+  ネットワーク:
+    neurons        : 440
+    synapses       : 16880 (alive=16880)
+    fanout         : input=80, overconnect=40, inhibitory=20
+    ring_size      : 64 (max_delay=40)
+
+  初期 macro 観察量:
+    Vth 分布: mean=561.0, std=123.2
+    pulse_width: mean=55.5, max=80
+
+== Phase 1: 訓練前評価 ==
+
+  -- PRE --
+    selectivity   : 0.281  (within 0.309 - between 0.027)
+    active outputs: 40 / 40
+    hit /syllable : pa:13/40  ki:3/40  tu:10/40  se:40/40  mo:0/40  (across 20 samples)
+    total spikes  : pa:22  ki:58  tu:19  se:3114  mo:0  
+    出力スパイク時刻分布 (ms, 0-300ms 内):
+      p10=31.0  p25=37.5  p50=46.0  p75=57.0  p90=71.5  mean=49.5  (n=3213)
+
+== Phase 2: 訓練 5000 試行 (音節ランダム選択) ==
+  snap_interval = 500
+    500  within=0.577  sel=0.469  act=27/40  charge_μ=0.0  pw_μ=24.1  alive=16880
+   1000  within=0.549  sel=0.459  act=26/40  charge_μ=0.0  pw_μ=24.0  alive=16880
+   1500  within=0.562  sel=0.461  act=26/40  charge_μ=0.0  pw_μ=25.2  alive=16000
+   2000  within=0.593  sel=0.488  act=26/40  charge_μ=0.0  pw_μ=26.9  alive=14920
+   2500  within=0.590  sel=0.491  act=25/40  charge_μ=0.0  pw_μ=27.5  alive=13880
+   3000  within=0.521  sel=0.426  act=25/40  charge_μ=0.0  pw_μ=28.8  alive=13200
+   3500  within=0.560  sel=0.463  act=25/40  charge_μ=0.0  pw_μ=31.3  alive=12140
+   4000  within=0.593  sel=0.490  act=25/40  charge_μ=0.0  pw_μ=30.0  alive=12060
+   4500  within=0.590  sel=0.489  act=25/40  charge_μ=0.0  pw_μ=30.3  alive=11960
+   5000  within=0.591  sel=0.489  act=25/40  charge_μ=0.0  pw_μ=30.3  alive=11960
+
+== Phase 3: 訓練後評価 (出力 layer) ==
+
+  -- POST (output) --
+    selectivity   : 0.493  (within 0.594 - between 0.101)
+    active outputs: 25 / 40
+    hit /syllable : pa:0/40  ki:5/40  tu:3/40  se:25/40  mo:0/40  (across 20 samples)
+    total spikes  : pa:0  ki:100  tu:60  se:1781  mo:0  
+    出力スパイク時刻分布 (ms, 0-300ms 内):
+      p10=31.0  p25=35.5  p50=41.0  p75=48.5  p90=55.5  mean=42.0  (n=1941)
+
+══════════════════════════════════════════════════════════
+  M0+M1 DRAM 音素識別サマリ
+  総発火数 (累積): 1332431
+  刈り取りシナプス: 4920
+  alive シナプス: 11960/16880
+  CSV: phase2_dram_phoneme_snapshots.csv
