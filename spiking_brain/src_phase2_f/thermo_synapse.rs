@@ -78,6 +78,9 @@ pub struct ThermoSynapse {
     pub decay_counter: i32,
     /// vitality 減衰用カウンタ (VITALITY_DECAY_INTERVAL ごとに vitality -= 1)
     pub vitality_counter: i32,
+    /// 因果窓 (この値より小さい spike_trace が「最近発火」 と判定される)
+    /// M1: 160 step (80ms)、 M2: 320 step (160ms 音節スケール)
+    pub causal_window: i32,
 }
 
 impl ThermoSynapse {
@@ -93,6 +96,7 @@ impl ThermoSynapse {
             alive: VITALITY_INITIAL > 0,
             decay_counter: 0,
             vitality_counter: 0,
+            causal_window: CAUSAL_WINDOW,  // M1 default、 M2 では 320 に書き換える
         }
     }
 
@@ -100,7 +104,7 @@ impl ThermoSynapse {
     /// pre が直近に発火していたら因果 → conductance を上げる
     pub fn update_on_post_spike_trace(&mut self, pre_spike_trace: i32) {
         if !self.alive { return; }
-        if pre_spike_trace > 0 && pre_spike_trace < CAUSAL_WINDOW {
+        if pre_spike_trace > 0 && pre_spike_trace < self.causal_window {
             self.conductance += LTP_AMOUNT;
             if self.conductance > CONDUCTANCE_MAX { self.conductance = CONDUCTANCE_MAX; }
         }
@@ -111,7 +115,7 @@ impl ThermoSynapse {
     /// Bi & Poo 1998 で実験的に確立された機構、生物的に必要
     pub fn update_on_pre_spike_trace(&mut self, post_spike_trace: i32) {
         if !self.alive { return; }
-        if post_spike_trace > 0 && post_spike_trace < CAUSAL_WINDOW {
+        if post_spike_trace > 0 && post_spike_trace < self.causal_window {
             self.conductance -= LTD_AMOUNT;
             if self.conductance < 0 { self.conductance = 0; }
         }

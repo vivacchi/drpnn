@@ -31,9 +31,9 @@ const DT_MS: f64 = 0.5;
 const TRIAL_STEPS: usize = (TRIAL_DURATION_MS / DT_MS) as usize;  // 600
 /// M1 用 fingerprint bin 幅 (10ms、 一次聴覚野の時間精度に合致)
 const FINGERPRINT_BIN_WIDTH_MS_M1: f64 = 10.0;
-/// M2 用 fingerprint bin 幅 (50ms、 二次聴覚野の積分窓 10-100ms と合致)
-/// M2_A2_DESIGN.md §1.1: A2 は「時間積分窓が長い (10-100 ms)、 抽象度上昇」
-const FINGERPRINT_BIN_WIDTH_MS_M2: f64 = 50.0;
+/// M2 用 fingerprint bin 幅 (10ms に戻し、 修正 2 単独効果を測定)
+/// 修正 1 (50ms) 実験で逆効果と判明、 修正 2 (causal_window) のみで評価する
+const FINGERPRINT_BIN_WIDTH_MS_M2: f64 = 10.0;
 /// M1 出力 → M2 入力 1:1 直結時の電流値
 const INPUT_CURRENT_M2: i32 = 60;
 

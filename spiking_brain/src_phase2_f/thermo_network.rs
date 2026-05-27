@@ -61,6 +61,9 @@ pub struct ThermoNetworkConfig {
     pub enable_up_down: bool,
     /// 任意 I/O 配置 (M2 等)。 None なら従来の rigid 配置
     pub io_layout: Option<IoLayout>,
+    /// 因果窓と spike_trace 持続時間 (M1: 160 step / 80ms、 M2: 320 step / 160ms)
+    /// 設計書 M2_A2_DESIGN.md §2.4 に基づく階層別時間スケール
+    pub causal_window: i32,
 }
 
 impl Default for ThermoNetworkConfig {
@@ -84,6 +87,7 @@ impl Default for ThermoNetworkConfig {
             dt_ms: 0.5,
             enable_up_down: false, // デフォルト OFF (既存実験との互換性、有効化は明示的に)
             io_layout: None, // デフォルト rigid (M1 互換)
+            causal_window: 160, // M1 デフォルト (80ms)
         }
     }
 }
@@ -125,6 +129,7 @@ impl ThermoNetworkConfig {
             dt_ms: 0.5,
             enable_up_down: false,
             io_layout: Some(IoLayout { input_positions, output_positions }),
+            causal_window: 320,  // M2 = 160ms 因果窓 (音節スケール、 M2_A2_DESIGN.md §2.4)
         }
     }
 }
@@ -385,6 +390,15 @@ impl ThermoNetwork {
             }
         }
 
+        // 階層別 causal_window / spike_trace_init を全 neuron / synapse に伝播
+        // (M1 default 160、 M2 default 320、 M2_A2_DESIGN.md §2.4)
+        for n in &mut neurons {
+            n.spike_trace_init = config.causal_window;
+        }
+        for s in &mut synapses {
+            s.causal_window = config.causal_window;
+        }
+
         // out_syn / in_syn の構築
         let mut out_syn: Vec<Vec<usize>> = vec![Vec::new(); neurons.len()];
         let mut in_syn: Vec<Vec<usize>> = vec![Vec::new(); neurons.len()];
@@ -596,7 +610,9 @@ impl ThermoNetwork {
                 &self.topology,
                 &self.position_index,
             );
+            let cw = self.config.causal_window;
             for new_idx in prev_total..self.synapses.len() {
+                self.synapses[new_idx].causal_window = cw;  // 階層別 causal_window 伝播
                 let s = &self.synapses[new_idx];
                 self.out_syn[s.pre].push(new_idx);
                 self.in_syn[s.post].push(new_idx);
@@ -696,8 +712,10 @@ impl ThermoNetwork {
                 &self.topology,
                 &self.position_index,
             );
-            // 新規シナプスのインデックスを out_syn / in_syn に登録
+            // 新規シナプスのインデックスを out_syn / in_syn に登録 + causal_window 伝播
+            let cw = self.config.causal_window;
             for new_idx in prev_total..self.synapses.len() {
+                self.synapses[new_idx].causal_window = cw;  // 階層別 (M2=320)
                 let s = &self.synapses[new_idx];
                 self.out_syn[s.pre].push(new_idx);
                 self.in_syn[s.post].push(new_idx);

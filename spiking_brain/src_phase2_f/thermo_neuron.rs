@@ -85,6 +85,12 @@ pub struct ThermoNeuron {
     // ─── 物理配置 ─────────────────────
     /// 2D グリッド上の位置 (軸索成長で参照)
     pub position: (i32, i32),
+
+    // ─── 階層別パラメータ (M1/M2 で異なる) ─────────────────────
+    /// 発火時に spike_trace に設定する値 (= 因果窓の最大長)
+    /// M1: 160 step (80ms、 一次聴覚野)
+    /// M2: 320 step (160ms、 二次聴覚野、 音節スケール)
+    pub spike_trace_init: i32,
 }
 
 impl ThermoNeuron {
@@ -116,6 +122,7 @@ impl ThermoNeuron {
             down_period: 100,
             up_offset: 0,
             position,
+            spike_trace_init: 160,  // M1 default (M2 では 320 に書き換える)
         }
     }
 
@@ -145,6 +152,7 @@ impl ThermoNeuron {
             down_period: 100,
             up_offset: 0,
             position,
+            spike_trace_init: 160,
         }
     }
 
@@ -186,6 +194,7 @@ impl ThermoNeuron {
             down_period: 100,
             up_offset: 0,
             position,
+            spike_trace_init: 160,
         }
     }
 
@@ -258,7 +267,7 @@ impl ThermoNeuron {
             // G-1: 絶対不応期なし、enthalpy 消費が不応期を emergent に作る
             self.last_spike_time = current_time;
             // B4: 発火痕跡を CAUSAL_WINDOW にセット (因果窓 step 数、thermo_synapse 定数と一致)
-            self.spike_trace = 160;
+            self.spike_trace = self.spike_trace_init;
             true
         } else {
             false
