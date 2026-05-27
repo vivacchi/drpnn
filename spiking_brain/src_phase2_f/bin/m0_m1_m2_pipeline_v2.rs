@@ -29,7 +29,11 @@ use std::io::Write as IoWrite;
 const TRIAL_DURATION_MS: f64 = 300.0;
 const DT_MS: f64 = 0.5;
 const TRIAL_STEPS: usize = (TRIAL_DURATION_MS / DT_MS) as usize;  // 600
-const FINGERPRINT_BIN_WIDTH_MS: f64 = 10.0;
+/// M1 用 fingerprint bin 幅 (10ms、 一次聴覚野の時間精度に合致)
+const FINGERPRINT_BIN_WIDTH_MS_M1: f64 = 10.0;
+/// M2 用 fingerprint bin 幅 (50ms、 二次聴覚野の積分窓 10-100ms と合致)
+/// M2_A2_DESIGN.md §1.1: A2 は「時間積分窓が長い (10-100 ms)、 抽象度上昇」
+const FINGERPRINT_BIN_WIDTH_MS_M2: f64 = 50.0;
 /// M1 出力 → M2 入力 1:1 直結時の電流値
 const INPUT_CURRENT_M2: i32 = 60;
 
@@ -87,12 +91,12 @@ fn present_syllable_v2(
     (m1_out_log, m2_out_log)
 }
 
-fn fingerprint(log: &[(usize, f64)], n_out: usize) -> Vec<f64> {
+fn fingerprint(log: &[(usize, f64)], n_out: usize, bin_width_ms: f64) -> Vec<f64> {
     let mut tr = OutputTrace::new(n_out, 50.0);
     for &(oi, t) in log {
         tr.record_spike(oi, t);
     }
-    tr.time_binned_fingerprint(TRIAL_DURATION_MS, FINGERPRINT_BIN_WIDTH_MS)
+    tr.time_binned_fingerprint(TRIAL_DURATION_MS, bin_width_ms)
 }
 
 fn mean_pairwise(fps: &[Vec<f64>]) -> f64 {
@@ -159,8 +163,8 @@ fn evaluate_v2(
             let (m1_log, m2_log) = present_syllable_v2(m1, m2, cochlea, &waveforms[si]);
             for &(oi, _) in &m1_log { m1_active[oi] = true; }
             for &(oi, _) in &m2_log { m2_active[oi] = true; }
-            m1_fps[si].push(fingerprint(&m1_log, n_m1_out));
-            m2_fps[si].push(fingerprint(&m2_log, n_m2_out));
+            m1_fps[si].push(fingerprint(&m1_log, n_m1_out, FINGERPRINT_BIN_WIDTH_MS_M1));
+            m2_fps[si].push(fingerprint(&m2_log, n_m2_out, FINGERPRINT_BIN_WIDTH_MS_M2));
         }
     }
 
@@ -241,8 +245,8 @@ fn main() {
                     let (m1_log, m2_log) = present_syllable_v2(&mut m1, &mut m2, &mut cochlea, &waveforms[si]);
                     for &(oi, _) in &m1_log { m1_active[oi] = true; }
                     for &(oi, _) in &m2_log { m2_active[oi] = true; }
-                    m1_fps[si].push(fingerprint(&m1_log, m1.output_neurons.len()));
-                    m2_fps[si].push(fingerprint(&m2_log, m2.output_neurons.len()));
+                    m1_fps[si].push(fingerprint(&m1_log, m1.output_neurons.len(), FINGERPRINT_BIN_WIDTH_MS_M1));
+                    m2_fps[si].push(fingerprint(&m2_log, m2.output_neurons.len(), FINGERPRINT_BIN_WIDTH_MS_M2));
                 }
             }
             let (m1_sel, m1_w, _) = compute_selectivity(&m1_fps);
