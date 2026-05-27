@@ -102,6 +102,11 @@ path = "src_phase2_f/bin/internal_state_probe.rs"
 name = "m0_m1_m2_pipeline"
 path = "src_phase2_f/bin/m0_m1_m2_pipeline.rs"
 
+# Phase 2 Fork F: M0+M1+M2 B 案 (M2 内部 40→20 収束、 集約判断を物理プロセスに)
+[[bin]]
+name = "m0_m1_m2_pipeline_v2"
+path = "src_phase2_f/bin/m0_m1_m2_pipeline_v2.rs"
+
 # Phase 3: M0 蝸牛 → M1 3D HCP 配置版 パイプライン (2D 版との直接比較用)
 [[bin]]
 name = "m0_m1_3d_pipeline"

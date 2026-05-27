@@ -22,6 +22,16 @@ pub const GROWTH_INTERVAL: i32 = 200;
 /// 軸索成長結線 conductance=20 → 信号 2 (弱い結線として正しく機能)
 pub const SIGNAL_SCALE_DIVISOR: i32 = 10;
 
+/// 任意 I/O 配置 (M2 等で n_input != grid_w や n_output != grid_w*2 の場合に使用)
+/// None なら従来の rigid 配置 (input y=0、 output y=H-2,H-1)
+#[derive(Debug, Clone)]
+pub struct IoLayout {
+    /// 入力ニューロンの位置リスト (順序が input_neurons の順序と一致)
+    pub input_positions: Vec<(i32, i32)>,
+    /// 出力ニューロンの位置リスト (順序が output_neurons の順序と一致)
+    pub output_positions: Vec<(i32, i32)>,
+}
+
 /// ネットワーク構成設定
 #[derive(Debug, Clone)]
 pub struct ThermoNetworkConfig {
@@ -49,6 +59,8 @@ pub struct ThermoNetworkConfig {
     /// UP/DOWN 状態を有効化するか (PAPER §5.12.7-A、池谷 2005)
     /// false で既存動作 (up_offset=0 と等価)、true で多重アトラクター物理実装
     pub enable_up_down: bool,
+    /// 任意 I/O 配置 (M2 等)。 None なら従来の rigid 配置
+    pub io_layout: Option<IoLayout>,
 }
 
 impl Default for ThermoNetworkConfig {
@@ -71,6 +83,48 @@ impl Default for ThermoNetworkConfig {
             axon_growth_interval: GROWTH_INTERVAL,
             dt_ms: 0.5,
             enable_up_down: false, // デフォルト OFF (既存実験との互換性、有効化は明示的に)
+            io_layout: None, // デフォルト rigid (M1 互換)
+        }
+    }
+}
+
+impl ThermoNetworkConfig {
+    /// M2 用設定: input 40 (y=0,1 の 2 行) + output 20 (y=21 の 1 行) + 内部 380
+    /// grid 20×22 = 440 (M1 と同じ規模)
+    /// M1 の出力 40 を そのまま M2 の入力 40 に 1:1 で接続できる
+    pub fn for_m2() -> Self {
+        let grid_w = 20;
+        let grid_h = 22;
+        // input: y=0,1 の 2 行 (40 cells)
+        let mut input_positions = Vec::with_capacity(40);
+        for y in 0..2 {
+            for x in 0..grid_w {
+                input_positions.push((x, y));
+            }
+        }
+        // output: y=21 の 1 行 (20 cells)
+        let mut output_positions = Vec::with_capacity(20);
+        for x in 0..grid_w {
+            output_positions.push((x, grid_h - 1));
+        }
+        // 内部: y=2..20 の 19 行 = 380 cells
+        // 内部 380 = 興奮 304 + 抑制 76 (18%)
+        // n_excitatory = 304 (内部) + 20 (出力) = 324
+        // n_inhibitory = 76
+        Self {
+            grid_width: grid_w,
+            grid_height: grid_h,
+            n_input: 40,
+            n_output: 20,
+            n_excitatory: 324,
+            n_inhibitory: 76,
+            input_fanout: 80,
+            delay_range: (2, 40),
+            seed: 301,  // M1 (300) と異なる
+            axon_growth_interval: GROWTH_INTERVAL,
+            dt_ms: 0.5,
+            enable_up_down: false,
+            io_layout: Some(IoLayout { input_positions, output_positions }),
         }
     }
 }
@@ -136,24 +190,6 @@ impl ThermoNetwork {
         //     興奮 304 = 残り (内部の 80% = 304 セル)
         //
         // すべてのセルに 1 ニューロン、重なりなし、DRP の PE = 1 ニューロン原則を遵守。
-        let internal_rows = (grid_h as usize) - 3; // y=0 入力 / y=H-2, H-1 出力 を除く
-        let internal_cells = internal_rows * (grid_w as usize);
-        let expected_internal = config.n_excitatory - config.n_output + config.n_inhibitory;
-        assert_eq!(
-            internal_cells, expected_internal,
-            "internal cell count mismatch: grid 内部 {} セル vs 配置必要 {} (exc-out + inh)",
-            internal_cells, expected_internal
-        );
-        assert_eq!(
-            config.n_input as i32, grid_w,
-            "input count ({}) must match grid_width ({})", config.n_input, grid_w
-        );
-        assert_eq!(
-            config.n_output as i32, grid_w * 2,
-            "output count ({}) must be 2 × grid_width ({}× 2 = {})",
-            config.n_output, grid_w, grid_w * 2
-        );
-
         let n_total = config.n_input + config.n_excitatory + config.n_inhibitory;
         assert_eq!(
             (grid_w * grid_h) as usize, n_total,
@@ -161,36 +197,84 @@ impl ThermoNetwork {
             grid_w, grid_h, grid_w * grid_h, n_total
         );
 
+        // I/O 配置のモード判定:
+        //   io_layout = None: rigid (input y=0、 output y=H-2,H-1)
+        //   io_layout = Some: 任意配置 (M2 等)
+        let (input_positions_explicit, output_positions_explicit) =
+            if let Some(layout) = &config.io_layout {
+                assert_eq!(layout.input_positions.len(), config.n_input,
+                    "io_layout input count ({}) != config.n_input ({})",
+                    layout.input_positions.len(), config.n_input);
+                assert_eq!(layout.output_positions.len(), config.n_output,
+                    "io_layout output count ({}) != config.n_output ({})",
+                    layout.output_positions.len(), config.n_output);
+                (Some(layout.input_positions.clone()), Some(layout.output_positions.clone()))
+            } else {
+                // rigid モード: 従来の assertion を適用
+                let internal_rows = (grid_h as usize) - 3;
+                let internal_cells = internal_rows * (grid_w as usize);
+                let expected_internal = config.n_excitatory - config.n_output + config.n_inhibitory;
+                assert_eq!(internal_cells, expected_internal,
+                    "internal cell count mismatch: grid 内部 {} vs 配置必要 {}",
+                    internal_cells, expected_internal);
+                assert_eq!(config.n_input as i32, grid_w,
+                    "input count ({}) must match grid_width ({})", config.n_input, grid_w);
+                assert_eq!(config.n_output as i32, grid_w * 2,
+                    "output count ({}) must be 2 × grid_width ({}×2={})",
+                    config.n_output, grid_w, grid_w * 2);
+                (None, None)
+            };
+
         let mut neurons: Vec<ThermoNeuron> = Vec::with_capacity(n_total);
         let mut input_neurons: Vec<usize> = Vec::new();
         let mut output_neurons: Vec<usize> = Vec::new();
 
-        // (1) 入力ニューロン: y=0、x=0..grid_w-1 (1 セル 1 個)
-        for x in 0..grid_w {
-            neurons.push(ThermoNeuron::input((x, 0)));
-            input_neurons.push(neurons.len() - 1);
+        // (1) 入力ニューロン
+        if let Some(positions) = &input_positions_explicit {
+            for &pos in positions {
+                neurons.push(ThermoNeuron::input(pos));
+                input_neurons.push(neurons.len() - 1);
+            }
+        } else {
+            for x in 0..grid_w {
+                neurons.push(ThermoNeuron::input((x, 0)));
+                input_neurons.push(neurons.len() - 1);
+            }
         }
 
-        // (2) 出力ニューロン (興奮性): y=grid_h-2, y=grid_h-1 の 2 行、各 grid_w 個
-        for dy in 0..2 {
-            let y = grid_h - 2 + dy;
-            for x in 0..grid_w {
-                neurons.push(ThermoNeuron::excitatory((x, y)));
+        // (2) 出力ニューロン (興奮性)
+        if let Some(positions) = &output_positions_explicit {
+            for &pos in positions {
+                neurons.push(ThermoNeuron::excitatory(pos));
                 output_neurons.push(neurons.len() - 1);
             }
-        }
-
-        // (3) 内部: y=1..grid_h-3 の 19 行を埋める
-        //   全 380 セルから seed ベースで 76 セルをランダム選択 → 抑制
-        //   残り 304 セルに興奮
-        //   均一密度 (Rockel et al. 1980) + 配置はランダム (生物の皮質と整合)
-        //   seed 固定なので決定論性は保たれる
-        let mut internal_positions: Vec<(i32, i32)> = Vec::new();
-        for y in 1..=(grid_h - 3) {
-            for x in 0..grid_w {
-                internal_positions.push((x, y));
+        } else {
+            for dy in 0..2 {
+                let y = grid_h - 2 + dy;
+                for x in 0..grid_w {
+                    neurons.push(ThermoNeuron::excitatory((x, y)));
+                    output_neurons.push(neurons.len() - 1);
+                }
             }
         }
+
+        // (3) 内部: grid 全体から input + output の位置を除いた残り
+        let used_positions: std::collections::HashSet<(i32, i32)> = neurons.iter()
+            .map(|n| n.position)
+            .collect();
+        let mut internal_positions: Vec<(i32, i32)> = Vec::new();
+        for y in 0..grid_h {
+            for x in 0..grid_w {
+                if !used_positions.contains(&(x, y)) {
+                    internal_positions.push((x, y));
+                }
+            }
+        }
+        let expected_internal = config.n_excitatory - config.n_output + config.n_inhibitory;
+        assert_eq!(internal_positions.len(), expected_internal,
+            "internal positions ({}) != expected ({}) for config (n_exc {} - n_out {} + n_inh {})",
+            internal_positions.len(), expected_internal,
+            config.n_excitatory, config.n_output, config.n_inhibitory);
         // 抑制ニューロンを配置する position のインデックス集合 (シャッフルで決定論的乱択)
         let mut idx_pool: Vec<usize> = (0..internal_positions.len()).collect();
         idx_pool.shuffle(&mut rng);
@@ -649,6 +733,27 @@ impl ThermoNetwork {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_m2_network() {
+        let cfg = ThermoNetworkConfig::for_m2();
+        let net = ThermoNetwork::new(cfg);
+        assert_eq!(net.n_neurons(), 440);
+        assert_eq!(net.input_neurons.len(), 40);
+        assert_eq!(net.output_neurons.len(), 20);
+        // M2 入力は y=0,1 の 2 行
+        for &nid in &net.input_neurons {
+            let pos = net.neurons[nid].position;
+            assert!(pos.1 == 0 || pos.1 == 1,
+                "M2 input neuron at y={}, expected 0 or 1", pos.1);
+        }
+        // M2 出力は y=21 の 1 行
+        for &nid in &net.output_neurons {
+            assert_eq!(net.neurons[nid].position.1, 21,
+                "M2 output neuron at y={}, expected 21",
+                net.neurons[nid].position.1);
+        }
+    }
 
     #[test]
     fn build_small_network() {
