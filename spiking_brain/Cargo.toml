@@ -106,3 +106,8 @@ path = "src_phase2_f/bin/m0_m1_m2_pipeline.rs"
 [[bin]]
 name = "m0_m1_3d_pipeline"
 path = "src_phase3_3d/bin/m0_m1_3d_pipeline.rs"
+
+# Phase 3: M1 3D 単体 白色雑音識別 (M0 バイパス、 within=1.0 飽和診断用)
+[[bin]]
+name = "m1_3d_whitenoise"
+path = "src_phase3_3d/bin/m1_3d_whitenoise.rs"
