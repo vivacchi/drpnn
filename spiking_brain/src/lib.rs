@@ -56,3 +56,12 @@ pub mod phase2_f;
 //   - 2D vs 3D の並行比較で「物理空間次元が学習結果に与える影響」を検証
 #[path = "../src_phase3_3d/mod.rs"]
 pub mod phase3_3d;
+
+// Phase 2 DRAM 物理モデル版 (STAGE2GAMMA V2 設計)
+//   - 1 セル = 1 ニューロン (キャパシタ電荷 = 膜電位)
+//   - Vth ばらつき = 発火閾値の個性 (製造ばらつきを活用)
+//   - 個別セル書き込み (WL + BL + PWM パルス幅 = シナプス重み)
+//   - 時間軸 = 行アドレス (リングバッファで時間を物理化)
+//   - Phase 2 fork F と並存、 ハードウェア実装への橋渡し
+#[path = "../src_phase2_dram/mod.rs"]
+pub mod phase2_dram;
