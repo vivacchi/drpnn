@@ -30,6 +30,12 @@ pub const VTH_MAX: i32 = 900;
 pub const LEAK_PER_STEP: i32 = 5;
 /// 発火後の spike_trace 値 (STDP 因果窓 = 160 step = 80ms)
 pub const SPIKE_TRACE_INIT: i32 = 160;
+/// 1 回発火あたりの local_entropy 加算量 (Phase 2 fork F と同じ機構)
+pub const ENTROPY_PER_SPIKE: i32 = 10;
+/// local_entropy 自然減衰の周期 (Phase 2 と同じ 50 step)
+pub const ENTROPY_DECAY_INTERVAL: i32 = 50;
+/// local_entropy 1 回あたりの減衰量
+pub const ENTROPY_DECAY_RATE: i32 = 1;
 
 #[derive(Clone, Debug)]
 pub struct DramCell {
@@ -50,6 +56,16 @@ pub struct DramCell {
 
     /// 抑制性か (V2 §9.2.g 開放問題: 興奮側に negative weight 加算で表現)
     pub is_inhibitory: bool,
+
+    /// 局所エントロピー (発火頻度に応じた閾値上昇、 V2 §1 原理 4 を動的化)
+    /// Phase 2 fork F の local_entropy と同じ機構、 熱力学的描像 (§11) と整合
+    pub local_entropy: i32,
+
+    /// エントロピー減衰カウンタ (50 step ごとに -1)
+    pub entropy_decay_counter: i32,
+
+    /// このセルがエントロピーを生成するか (true: excit/inhib、 false: input)
+    pub generates_entropy: bool,
 }
 
 impl DramCell {
@@ -62,6 +78,9 @@ impl DramCell {
             spike_trace: 0,
             is_input: false,
             is_inhibitory: false,
+            local_entropy: 0,
+            entropy_decay_counter: 0,
+            generates_entropy: true,
         }
     }
 
@@ -73,11 +92,15 @@ impl DramCell {
         Self::new_with_vth(vth)
     }
 
-    /// 入力ニューロン版 (Vth は低めに設定して刺激に応答しやすく)
+    /// 入力ニューロン版 (Vth は低めに設定して cochlea 出力に応答可能に)
+    /// Phase 2 ThermoNeuron input は threshold_base=30 と低く、 spontaneous_input=2 で
+    /// 常に sub-threshold 維持。 DRAM 版は spontaneous なし、 代わりに Vth を大幅減 (30%)。
+    /// 入力ニューロンは entropy 生成しない (純粋トランスデューサ)
     pub fn new_input(rng: &mut StdRng) -> Self {
         let mut cell = Self::new_random_vth(rng);
-        cell.vth_threshold = (cell.vth_threshold * 7) / 10;  // 平均的に 70% に下げる
+        cell.vth_threshold = (cell.vth_threshold * 3) / 10;  // 平均的に 30% に下げる (180 程度)
         cell.is_input = true;
+        cell.generates_entropy = false;
         cell
     }
 
@@ -112,12 +135,27 @@ impl DramCell {
             self.charge = CHARGE_MAX;
         }
 
-        // 3. 発火判定: Vth 超え (= センスアンプが ON と判定)
-        if self.charge >= self.vth_threshold {
+        // 3. local_entropy 減衰 (発火頻度に応じた閾値上昇の自然冷却)
+        self.entropy_decay_counter += 1;
+        if self.entropy_decay_counter >= ENTROPY_DECAY_INTERVAL {
+            self.entropy_decay_counter = 0;
+            if self.local_entropy > 0 {
+                self.local_entropy -= ENTROPY_DECAY_RATE;
+                if self.local_entropy < 0 { self.local_entropy = 0; }
+            }
+        }
+
+        // 4. 発火判定: Vth + local_entropy (動的閾値) 超え
+        let effective_threshold = self.vth_threshold + self.local_entropy;
+        if self.charge >= effective_threshold {
             // 破壊読み出し: 発火後はキャパシタが放電
             self.charge = 0;
             self.last_spike_time = current_time;
             self.spike_trace = SPIKE_TRACE_INIT;
+            // entropy 蓄積 (慣化機構、 過剰発火を抑制)
+            if self.generates_entropy {
+                self.local_entropy += ENTROPY_PER_SPIKE;
+            }
             true
         } else {
             false

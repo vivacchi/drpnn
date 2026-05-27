@@ -111,3 +111,8 @@ path = "src_phase3_3d/bin/m0_m1_3d_pipeline.rs"
 [[bin]]
 name = "m1_3d_whitenoise"
 path = "src_phase3_3d/bin/m1_3d_whitenoise.rs"
+
+# Phase 2 DRAM: M0 蝸牛 → M1 DRAM 物理モデル版 パイプライン (V2 設計検証)
+[[bin]]
+name = "m0_m1_dram_pipeline"
+path = "src_phase2_dram/bin/m0_m1_dram_pipeline.rs"
