@@ -179,6 +179,26 @@ impl ThermoNetwork3dConfig {
         assert_eq!(g.len(), 22);
         Self::for_cone(g)  // for_cone でも spindle でも内部実装は同じ (layer_grids 使用)
     }
+
+    /// Balloon shape (急峻膨張+緩慢収縮): 入力 20 → 即 40 → 緩慢に 30 へ
+    /// 22 層、 775 cells (Spindle と同サイズで「立ち上がり方」 のみ違う)
+    /// 仮説: 入力直後に広い処理空間 (40 cell) を確保することで、
+    ///       表現空間の早期確保 → 後段の収束がスムーズに
+    /// z=0: 4×5=20 (入力)
+    /// z=1-12: 5×8=40 (即時ピーク 12 層、 入力から一気に膨張)
+    /// z=13: 5×7=35 (緩慢収縮開始)
+    /// z=14-20: 5×6=30 (緩慢収縮 7 層)
+    /// z=21: 5×6=30 (出力)
+    pub fn balloon_default() -> Self {
+        let mut g = Vec::with_capacity(22);
+        g.push((4, 5));                          // z=0: 20 (input)
+        for _ in 1..=12 { g.push((5, 8)); }      // z=1-12: 40 (一気に膨張、 12 層維持)
+        g.push((5, 7));                          // z=13: 35 (緩慢収縮開始)
+        for _ in 14..=20 { g.push((5, 6)); }     // z=14-20: 30 (緩慢収縮)
+        g.push((5, 6));                          // z=21: 30 (output)
+        assert_eq!(g.len(), 22);
+        Self::for_cone(g)
+    }
 }
 
 impl Default for ThermoNetwork3dConfig {

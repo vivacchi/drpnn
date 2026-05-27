@@ -309,6 +309,10 @@ fn main() {
             println!("  ★ placement: spindle (5×8×22、 775 cells、 入力 20 → 中間ピーク 40 → 出力 30)");
             ThermoNetwork3dConfig::spindle_default()
         }
+        "balloon" => {
+            println!("  ★ placement: balloon (5×8×22、 775 cells、 入力 20 → 即時 40 → 緩慢 30)");
+            ThermoNetwork3dConfig::balloon_default()
+        }
         _ => match grid_d_override {
             Some(gd) => {
                 println!("  ★ grid_d オーバーライド: {} (デフォルト 22)", gd);
