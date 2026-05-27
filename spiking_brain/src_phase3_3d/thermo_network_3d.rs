@@ -154,6 +154,31 @@ impl ThermoNetwork3dConfig {
         assert_eq!(g.len(), 22);
         Self::for_cone(g)
     }
+
+    /// Spindle shape (紡錘形): 入力 20 → 中間ピーク 40 → 出力 30
+    /// 生物の皮質 L4 (granular layer) が最も密という構造を模倣
+    /// 22 層、 775 cells
+    /// z=0: 4×5=20 (入力)
+    /// z=1: 5×5=25
+    /// z=2: 5×6=30
+    /// z=3: 5×7=35
+    /// z=4-15: 5×8=40 (ピーク 12 層)
+    /// z=16: 5×7=35
+    /// z=17-20: 5×6=30
+    /// z=21: 5×6=30 (出力)
+    pub fn spindle_default() -> Self {
+        let mut g = Vec::with_capacity(22);
+        g.push((4, 5));   // z=0: 20 (input)
+        g.push((5, 5));   // z=1: 25
+        g.push((5, 6));   // z=2: 30
+        g.push((5, 7));   // z=3: 35
+        for _ in 4..=15 { g.push((5, 8)); }  // z=4-15: 40 (peak)
+        g.push((5, 7));   // z=16: 35
+        for _ in 17..=20 { g.push((5, 6)); }  // z=17-20: 30
+        g.push((5, 6));   // z=21: 30 (output)
+        assert_eq!(g.len(), 22);
+        Self::for_cone(g)  // for_cone でも spindle でも内部実装は同じ (layer_grids 使用)
+    }
 }
 
 impl Default for ThermoNetwork3dConfig {

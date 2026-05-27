@@ -298,11 +298,16 @@ fn main() {
 
     // placement モード判定
     // cone: 5×6×22 cone shape (入力 20 → 出力 30、 561 cells)
+    // spindle: 5×8×22 紡錘形 (入力 20 → 中間ピーク 40 → 出力 30、 775 cells)
     // block (default): 5×6×grid_d full block
     let mut cfg = match placement.as_str() {
         "cone" => {
             println!("  ★ placement: cone (5×6×22、 561 cells、 入力 20 → 出力 30 fan-out)");
             ThermoNetwork3dConfig::cone_default()
+        }
+        "spindle" => {
+            println!("  ★ placement: spindle (5×8×22、 775 cells、 入力 20 → 中間ピーク 40 → 出力 30)");
+            ThermoNetwork3dConfig::spindle_default()
         }
         _ => match grid_d_override {
             Some(gd) => {
