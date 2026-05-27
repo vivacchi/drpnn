@@ -106,31 +106,49 @@ M2 を追加すると **M1 が固定点を脱出できなくなる**。 仮説:
 
 ## 明朝の起点 (どこから再開するか)
 
-### 即座に確認すべきこと
+### ⚠️ 重大な発見 (寝る直前に判明)
 
-**標準 M0+M1 10K 再実行の結果** が `phase2_f_m0m1_10k_repro.log` に出ているはず:
+**標準 M0+M1 10K 再現結果: POST sel = 0.389** (active 12/40)
 
-```bash
-cd /c/ai/nnai/spiking_brain_v0.5/spiking_brain
-tail -30 phase2_f_m0m1_10k_repro.log
-```
+過去の record 0.795 (active 38/40) は **現状コードで再現しない**。
 
-POST sel を確認:
-- **0.7+ なら**: 過去の 0.795 が再現、 M2 統合の問題確定 → C-4 (M2 別 design)
-- **0.4 程度なら**: codebase regression、 git log で Tier 1-3 修正後を疑う
+| | 過去 record | 現状コード (今日再現) |
+|---|---|---|
+| 10K POST sel | 0.795 | **0.389** ← 半分 |
+| 10K active | 38/40 | **12/40** ← 1/3 |
 
-### 次の選択肢
+→ **仮説 3 確定 (Codebase Regression)**
 
-#### A) M2 統合問題確定 (10K 再現成功) の場合
-- **C-4-a**: M2 の STDP 因果窓を 2× に延長 (生物学的に正しい M2 仕様、 設計書 §5.2)
-- **C-4-b**: M2 入力電流 INPUT_CURRENT_M2=60 を調整 (60 が強すぎ/弱すぎの可能性)
-- **C-4-c**: M1→M2 接続を spike 直伝ではなく rate code に変換
-- **C-4-d**: M2 を完全に別構造 (例: より sparse な topology)
+つまり M2 統合の問題ではなく、 **M1 本体の動作が過去のどこかで壊れた**。
+M2 B 案で M1 sel=0.253 が出ていたのも、 同じ regression が背景。
+5K (0.389) と 10K (0.389) で全く改善しない = 既に固定点ロック状態が常態化。
 
-#### B) Codebase regression (10K 再現失敗) の場合
-- 直近の変更 (M2 用 ThermoNetwork 一般化、 3D 関連) で M1 標準動作が壊れた可能性
-- git log で b4504a4 → 過去の 0.795 達成 commit (おそらく 968b87e より前) を bisect
-- 該当 commit を特定して fix
+### 次の選択肢 (regression 確定後の方針)
+
+最優先は **regression 原因の特定**。 候補プラン:
+
+#### Plan-A (推奨): git bisect で原因 commit 特定
+1. 既知の良 commit を特定 (PAPER §5.12.3a で 0.795 を達成した時期、 おそらく `686ff14` 周辺、 2026-05-25 前後)
+2. 現在の `97077bd` までの範囲で bisect
+3. 30 commits くらいの範囲 → 5 回程度の build + 5K test で特定可能
+4. 問題 commit を特定 → 該当変更を見直し or revert
+
+#### Plan-B: 直近変更を疑い順に検証
+過去 30 commits を時系列で疑う:
+1. **Phase 2 DRAM 関連** (`49619f5` 以降): 別モジュールなのでM1に影響しないはずだが lib.rs 変更あり
+2. **Phase 3 3D HCP 関連** (`d2112a4` 以降): src_phase3_3d は独立だが lib.rs に追加
+3. **M2 ThermoNetwork 一般化** (`83c7b04`): 直接 M1 のコード触ってる、 最有力疑い
+
+→ `83c7b04` (M2 B 案実装) の thermo_network.rs 変更を revert して 10K テスト
+
+#### Plan-C: Tier 1-3 修正を疑う
+2026-05-25 の Tier 1-3 修正 (`d918cad → 4376347 → 686ff14`) で:
+- cosine_similarity assert 追加
+- refractory_remaining フィールド削除
+- welch_t 改善 + multi-seed
+
+特に refractory_remaining 削除 (Tier 2) が M1 ダイナミクスに影響している可能性。
+0.795 が記録された時期がこの修正の前か後かを確認すべき。
 
 ### 中長期の選択肢 (M2 で時間掛けすぎない判断もあり)
 
@@ -143,11 +161,25 @@ POST sel を確認:
 
 ## 状況の俯瞰
 
-今日は **6 commits、 約 1500 行のコード追加、 5 つの 5K-10K 訓練実行**。 一日として濃い。
+今日は **7 commits、 約 1500 行のコード追加、 5 つの 5K-10K 訓練実行**。 一日として濃い。
 
 成果:
-- Phase 2 DRAM 物理モデル: **新規実装完成、 V2 設計の検証成功**
-- M2 統合: **集約戦略の問題発見 (A/B 案とも 0.25 程度で停滞)**
-- 重要な未解決: **M1 sel 標準 vs パイプライン 乖離** (10K 再現で判明予定)
+- Phase 2 DRAM 物理モデル: **新規実装完成、 V2 設計の検証成功 (sel=0.493, within=0.594 非飽和)**
+- M2 統合: 集約戦略 A/B どちらも sel=0.25 で停滞
+- **重大発見: M1 本体の codebase regression** (10K 0.795 → 0.389)
 
-明朝、 `phase2_f_m0m1_10k_repro.log` の POST sel を見て次の方向が確定します。 おやすみなさい。
+### 明朝の優先順位
+
+1. **git log で過去 30 commits を眺める** (10 分)
+2. **Plan-A or B を選んで実行** (regression 原因特定)
+3. **修正** (大規模なら一旦 revert)
+4. **修正後の M1 動作確認** (10K で 0.795 復活するか)
+5. **その上で M2 統合の議論再開**
+
+### 心理的な注記
+
+Phase 2 DRAM の成功 (within=0.594 非飽和!) は **本日最大の収穫**。
+M1 の regression は厄介だが、 git bisect で 1 commit に絞れば fix は早い。
+焦らず、 まず regression 解決 → その後 M2 → DRAM → 公開素材の順で。
+
+おやすみなさい。 明日も良い研究を!
