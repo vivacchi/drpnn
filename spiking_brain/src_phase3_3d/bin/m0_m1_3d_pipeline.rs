@@ -274,6 +274,9 @@ fn main() {
     // 省略時はデフォルト 22 (660 セル)。 11 で柱半分 (330 セル、 経路長半減)。
     let grid_d_override: Option<i32> = std::env::args().nth(4)
         .and_then(|s| s.parse().ok());
+    // CLI 第 5 引数: placement ("block" 既定 | "cone")
+    let placement: String = std::env::args().nth(5)
+        .unwrap_or_else(|| "block".to_string());
 
     let n_sample: usize = 20;
     let snap_interval: usize = if n_train >= 100_000 {
@@ -293,13 +296,21 @@ fn main() {
     println!("    上面 z=21 (30): 出力 30 完全充填");
     println!("  評価: 時間 bin 化 fingerprint (30 出力 × 30 bin = 900 dim)");
 
-    // grid_d 指定があれば for_grid で派生、 なければ default (5×6×22)
-    let mut cfg = match grid_d_override {
-        Some(gd) => {
-            println!("  ★ grid_d オーバーライド: {} (デフォルト 22)", gd);
-            ThermoNetwork3dConfig::for_grid(5, 6, gd)
+    // placement モード判定
+    // cone: 5×6×22 cone shape (入力 20 → 出力 30、 561 cells)
+    // block (default): 5×6×grid_d full block
+    let mut cfg = match placement.as_str() {
+        "cone" => {
+            println!("  ★ placement: cone (5×6×22、 561 cells、 入力 20 → 出力 30 fan-out)");
+            ThermoNetwork3dConfig::cone_default()
         }
-        None => ThermoNetwork3dConfig::default(),
+        _ => match grid_d_override {
+            Some(gd) => {
+                println!("  ★ grid_d オーバーライド: {} (デフォルト 22)", gd);
+                ThermoNetwork3dConfig::for_grid(5, 6, gd)
+            }
+            None => ThermoNetwork3dConfig::default(),
+        },
     };
     if let Some(fanout) = input_fanout_override {
         cfg.input_fanout = fanout;

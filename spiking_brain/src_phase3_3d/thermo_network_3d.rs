@@ -56,6 +56,10 @@ pub struct ThermoNetwork3dConfig {
     pub overconnect_mode: OverconnectMode,
     /// 過剰接続 1 ニューロンあたりの fanout (Random では 40、 HCP では 12 が天井)
     pub overconnect_fanout: usize,
+    /// 層ごとの (w, h)。 None なら全層 (grid_w, grid_h) full block (default)
+    /// Some(v) なら v[z] = (w, h) で cone shape (入力から出力へ徐々に増える)
+    /// 各層は (x ∈ [0..w], y ∈ [0..h]) の左下原点矩形
+    pub layer_grids: Option<Vec<(i32, i32)>>,
 }
 
 impl ThermoNetwork3dConfig {
@@ -87,7 +91,68 @@ impl ThermoNetwork3dConfig {
             enable_up_down: false,
             overconnect_mode: OverconnectMode::Random,
             overconnect_fanout: 40,
+            layer_grids: None,
         }
+    }
+
+    /// Cone 形状: 入力層 (z=0) から出力層 (z=grid_d-1) へ徐々にニューロン数を増やす
+    /// layer_grids[z] = (w, h) で z 層の cells は x∈[0..w], y∈[0..h] に配置
+    /// - 自動計算: grid_w, grid_h は全層 max、 grid_d = len(layer_grids)
+    /// - n_input = layer_grids[0].0 × layer_grids[0].1 (z=0 全て入力)
+    /// - n_output = layer_grids[N-1].0 × layer_grids[N-1].1 (z=N-1 全て出力)
+    /// - 抑制比 18%
+    pub fn for_cone(layer_grids: Vec<(i32, i32)>) -> Self {
+        assert!(!layer_grids.is_empty(), "layer_grids must not be empty");
+        let grid_d = layer_grids.len() as i32;
+        let grid_w = layer_grids.iter().map(|&(w, _)| w).max().unwrap();
+        let grid_h = layer_grids.iter().map(|&(_, h)| h).max().unwrap();
+
+        let (z0_w, z0_h) = layer_grids[0];
+        let n_input = (z0_w * z0_h) as usize;
+        let (zN_w, zN_h) = layer_grids[(grid_d - 1) as usize];
+        let n_output = (zN_w * zN_h) as usize;
+
+        let total: usize = layer_grids.iter()
+            .map(|&(w, h)| (w * h) as usize)
+            .sum();
+        let internal = total - n_input - n_output;
+        let n_inhibitory = ((internal as f64) * 0.18).round() as usize;
+        let n_excitatory = n_output + (internal - n_inhibitory);
+
+        Self {
+            grid_w, grid_h, grid_d,
+            n_input, n_output, n_excitatory, n_inhibitory,
+            input_fanout: 80,
+            delay_range: (2, 40),
+            seed: 300,
+            axon_growth_interval: GROWTH_INTERVAL,
+            dt_ms: 0.5,
+            enable_up_down: false,
+            overconnect_mode: OverconnectMode::Random,
+            overconnect_fanout: 40,
+            layer_grids: Some(layer_grids),
+        }
+    }
+
+    /// デフォルト cone shape (22 層、 入力 20 → 出力 30、 561 cells)
+    /// z=0: 4×5=20 (入力)
+    /// z=1-3: 4×5=20 (内部)
+    /// z=4-7: 4×6=24 (内部)
+    /// z=8-14: 5×5=25 (内部)
+    /// z=15-20: 5×6=30 (内部)
+    /// z=21: 5×6=30 (出力)
+    pub fn cone_default() -> Self {
+        let mut g = Vec::with_capacity(22);
+        // z=0..=3: 4×5
+        for _ in 0..=3 { g.push((4, 5)); }
+        // z=4..=7: 4×6
+        for _ in 4..=7 { g.push((4, 6)); }
+        // z=8..=14: 5×5
+        for _ in 8..=14 { g.push((5, 5)); }
+        // z=15..=21: 5×6
+        for _ in 15..=21 { g.push((5, 6)); }
+        assert_eq!(g.len(), 22);
+        Self::for_cone(g)
     }
 }
 
@@ -116,6 +181,7 @@ impl Default for ThermoNetwork3dConfig {
             enable_up_down: false,
             overconnect_mode: OverconnectMode::Random,
             overconnect_fanout: 40,
+            layer_grids: None,
         }
     }
 }
@@ -163,66 +229,97 @@ impl ThermoNetwork3d {
 
         let topology = Topology3d::new(config.grid_w, config.grid_h, config.grid_d);
         let n_total = config.n_input + config.n_excitatory + config.n_inhibitory;
-        assert_eq!(
-            topology.total_cells(),
-            n_total,
-            "grid full-fill: {}×{}×{}={} cells, n_total={}",
-            config.grid_w, config.grid_h, config.grid_d,
-            topology.total_cells(), n_total
-        );
+        // Block モード (layer_grids=None) は grid 全充填、 Cone モードは部分充填
+        if config.layer_grids.is_none() {
+            assert_eq!(
+                topology.total_cells(),
+                n_total,
+                "grid full-fill: {}×{}×{}={} cells, n_total={}",
+                config.grid_w, config.grid_h, config.grid_d,
+                topology.total_cells(), n_total
+            );
+        } else {
+            // Cone は grid に対し sparse
+            assert!(n_total <= topology.total_cells(),
+                "cone n_total {} must not exceed grid cells {}",
+                n_total, topology.total_cells());
+        }
 
         // ─── 位置リスト構築 ───
-        //   底面 z=0:
-        //     入力 20 セル: x∈[0..grid_w), y∈[1..grid_h-1) = 5×4 = 20
-        //     内部 10 セル: y=0 と y=grid_h-1 (5+5)
-        //   内部層 z=1..grid_d-1 (excl.):
-        //     全 grid_w × grid_h × (grid_d - 2) = 5×6×20 = 600 セル
-        //   上面 z=grid_d-1:
-        //     出力 30 セル (full)
-        let mut input_positions: Vec<(i32, i32, i32)> = Vec::with_capacity(20);
-        for y in 1..(config.grid_h - 1) {
-            for x in 0..config.grid_w {
-                input_positions.push((x, y, 0));
-            }
-        }
+        // 2 モード:
+        //   Block (layer_grids=None): 旧来の 5×6×22、 z=0 中央 4×5=20 入力 + 角 10 内部、
+        //                              z=1..20 全 30 cell 内部、 z=21 全 30 出力
+        //   Cone (layer_grids=Some):  per-layer (w, h)、 z=0 全て入力、
+        //                              z=1..N-1 内部、 z=N-1 全て出力 (左下原点矩形)
+        let (input_positions, internal_positions, output_positions) =
+            if let Some(layer_grids) = &config.layer_grids {
+                // Cone shape
+                let (z0_w, z0_h) = layer_grids[0];
+                let mut inp = Vec::new();
+                for y in 0..z0_h {
+                    for x in 0..z0_w {
+                        inp.push((x, y, 0));
+                    }
+                }
+                let mut intl = Vec::new();
+                for z in 1..(config.grid_d - 1) {
+                    let (w, h) = layer_grids[z as usize];
+                    for y in 0..h {
+                        for x in 0..w {
+                            intl.push((x, y, z));
+                        }
+                    }
+                }
+                let (zN_w, zN_h) = layer_grids[(config.grid_d - 1) as usize];
+                let mut outp = Vec::new();
+                for y in 0..zN_h {
+                    for x in 0..zN_w {
+                        outp.push((x, y, config.grid_d - 1));
+                    }
+                }
+                (inp, intl, outp)
+            } else {
+                // Block (default): 旧来の hardcoded layout
+                let mut inp: Vec<(i32, i32, i32)> = Vec::with_capacity(20);
+                for y in 1..(config.grid_h - 1) {
+                    for x in 0..config.grid_w {
+                        inp.push((x, y, 0));
+                    }
+                }
+                let mut bottom_internal: Vec<(i32, i32, i32)> = Vec::new();
+                for x in 0..config.grid_w {
+                    bottom_internal.push((x, 0, 0));
+                    bottom_internal.push((x, config.grid_h - 1, 0));
+                }
+                let mut middle_internal: Vec<(i32, i32, i32)> = Vec::new();
+                for z in 1..(config.grid_d - 1) {
+                    for y in 0..config.grid_h {
+                        for x in 0..config.grid_w {
+                            middle_internal.push((x, y, z));
+                        }
+                    }
+                }
+                let mut intl = Vec::new();
+                intl.extend(bottom_internal.iter().copied());
+                intl.extend(middle_internal.iter().copied());
+
+                let mut outp = Vec::new();
+                for y in 0..config.grid_h {
+                    for x in 0..config.grid_w {
+                        outp.push((x, y, config.grid_d - 1));
+                    }
+                }
+                (inp, intl, outp)
+            };
         assert_eq!(input_positions.len(), config.n_input,
             "input positions: {} vs n_input {}", input_positions.len(), config.n_input);
-
-        let mut bottom_internal_positions: Vec<(i32, i32, i32)> = Vec::new();
-        for x in 0..config.grid_w {
-            bottom_internal_positions.push((x, 0, 0));
-            bottom_internal_positions.push((x, config.grid_h - 1, 0));
-        }
-        let expected_bottom_internal = (2 * config.grid_w) as usize;
-        assert_eq!(bottom_internal_positions.len(), expected_bottom_internal);
-
-        let mut middle_internal_positions: Vec<(i32, i32, i32)> = Vec::new();
-        for z in 1..(config.grid_d - 1) {
-            for y in 0..config.grid_h {
-                for x in 0..config.grid_w {
-                    middle_internal_positions.push((x, y, z));
-                }
-            }
-        }
-        let expected_middle_internal =
-            ((config.grid_d - 2) * config.grid_h * config.grid_w) as usize;
-        assert_eq!(middle_internal_positions.len(), expected_middle_internal);
-
-        let mut internal_positions: Vec<(i32, i32, i32)> = Vec::new();
-        internal_positions.extend(bottom_internal_positions.iter().copied());
-        internal_positions.extend(middle_internal_positions.iter().copied());
         let expected_internal = config.n_excitatory - config.n_output + config.n_inhibitory;
         assert_eq!(internal_positions.len(), expected_internal,
             "internal positions: {} vs expected {}",
             internal_positions.len(), expected_internal);
-
-        let mut output_positions: Vec<(i32, i32, i32)> = Vec::with_capacity(30);
-        for y in 0..config.grid_h {
-            for x in 0..config.grid_w {
-                output_positions.push((x, y, config.grid_d - 1));
-            }
-        }
-        assert_eq!(output_positions.len(), config.n_output);
+        assert_eq!(output_positions.len(), config.n_output,
+            "output positions: {} vs n_output {}",
+            output_positions.len(), config.n_output);
 
         // ─── ニューロン生成 ───
         let mut neurons: Vec<ThermoNeuron3d> = Vec::with_capacity(n_total);
