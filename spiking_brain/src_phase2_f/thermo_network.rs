@@ -99,6 +99,45 @@ impl Default for ThermoNetworkConfig {
 }
 
 impl ThermoNetworkConfig {
+    /// M1 + 蝸牛神経核 (M0.5) 用設定: input 44 (octopus 4 + bushy 20 + stellate 20) + output 40
+    /// grid 20×23 = 460
+    ///   input 44: y=0,1 (40) + y=2 先頭 4 (4)
+    ///   output 40: y=21,22 (2 行)
+    ///   内部 376: 残り、 抑制 68 (18%)
+    pub fn for_m1_cn() -> Self {
+        let grid_w = 20;
+        let grid_h = 23;
+        let mut input_positions = Vec::with_capacity(44);
+        for y in 0..2 {
+            for x in 0..grid_w { input_positions.push((x, y)); }
+        }
+        for x in 0..4 { input_positions.push((x, 2)); }  // y=2 先頭 4
+        assert_eq!(input_positions.len(), 44);
+        let mut output_positions = Vec::with_capacity(40);
+        for y in (grid_h - 2)..grid_h {
+            for x in 0..grid_w { output_positions.push((x, y)); }
+        }
+        assert_eq!(output_positions.len(), 40);
+        // 内部 = 460 - 44 - 40 = 376、 抑制 68 (18%)、 興奮 308 + 出力 40 = 348
+        Self {
+            grid_width: grid_w,
+            grid_height: grid_h,
+            n_input: 44,
+            n_output: 40,
+            n_excitatory: 348,
+            n_inhibitory: 68,
+            input_fanout: 80,
+            delay_range: (2, 40),
+            seed: 300,
+            axon_growth_interval: GROWTH_INTERVAL,
+            dt_ms: 0.5,
+            enable_up_down: false,
+            io_layout: Some(IoLayout { input_positions, output_positions }),
+            causal_window: 160,
+            threshold_diversity_std: 0,
+        }
+    }
+
     /// M2 用設定: input 40 (y=0,1 の 2 行) + output 20 (y=21 の 1 行) + 内部 380
     /// grid 20×22 = 440 (M1 と同じ規模)
     /// M1 の出力 40 を そのまま M2 の入力 40 に 1:1 で接続できる

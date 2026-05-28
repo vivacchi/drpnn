@@ -39,7 +39,9 @@ fn run_phoneme(
             if idx < waveform.len() { samples[i] = waveform[idx]; }
         }
         let coch = cochlea.process_step(&samples);
-        let oct = cn.process_step(&coch);
+        let cn_out = cn.process_step(&coch);
+        // 先頭 N_OCTOPUS チャネルが Octopus 出力
+        let oct = &cn_out[0..N_OCTOPUS];
         let bin = (step / STEPS_PER_BIN).min(N_BINS - 1);
         for k in 0..N_OCTOPUS {
             if oct[k] > 0 {

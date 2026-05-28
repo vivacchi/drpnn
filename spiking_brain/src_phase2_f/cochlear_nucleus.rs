@@ -5,17 +5,24 @@
 //! M0 蝸牛 (有毛細胞、 20 帯域スパイク) と M1 (A1) の間に欠落していた信号分解ステージ。
 //! 3 細胞型 (Octopus / Bushy / Stellate) で音を時間・周波数・オンセットに並列分解。
 //!
-//! Step 1 (本実装): Octopus 細胞のみ (広帯域オンセット検出)
-//!   - 全 20 帯域の同時発火数を見て、 音のオンセット (多帯域同時立ち上がり) を検出
-//!   - ThermoNeuron で実装 (entropy 適応がオンセットのみ発火を物理的に生む)
+//! 3 細胞型実装 (全て ThermoNeuron):
+//!   - Octopus (4): 広帯域オンセット検出 (全帯域同時性、 entropy 適応でオンセットのみ)
+//!   - Bushy (20):  周波数別 忠実中継 + 立ち上がり強調 (entropy 適応が notch を生む)
+//!   - Stellate (20): 周波数別 スペクトル包絡 rate (隣接 ±1 プール、 chopper)
 //!
-//! Step 2-3 で Bushy (周波数別 transient)、 Stellate (包絡 rate) を追加予定。
+//! 出力: 44 ch (4 + 20 + 20) を M1 入力へ。
 
 use super::thermo_neuron::ThermoNeuron;
 use super::cochlea::{N_BANDS, FIRE_CURRENT};
 
 /// Octopus 細胞数 (オンセット感度の異なる 4 細胞)
 pub const N_OCTOPUS: usize = 4;
+/// Bushy 細胞数 (各帯域に 1)
+pub const N_BUSHY: usize = N_BANDS;
+/// Stellate 細胞数 (各帯域に 1)
+pub const N_STELLATE: usize = N_BANDS;
+/// 蝸牛神経核の総出力チャネル数
+pub const N_CN_OUTPUT: usize = N_OCTOPUS + N_BUSHY + N_STELLATE;  // 4 + 20 + 20 = 44
 /// 各 Octopus の同時発火閾値 (帯域数): 3, 5, 8, 12 帯域同時で段階的に発火
 pub const OCTOPUS_COINCIDENCE_TH: [i32; N_OCTOPUS] = [3, 5, 8, 12];
 
@@ -40,10 +47,54 @@ fn make_octopus(coincidence_th: i32) -> ThermoNeuron {
     n
 }
 
+/// Bushy 細胞用 ThermoNeuron
+/// 各帯域を忠実に中継 (1 cochlea スパイク=60 で発火)、 ただし entropy 適応で
+/// 持続発火を抑制 → 立ち上がり (notch) を強調。 生物の Globular bushy の "primary-like with notch"。
+fn make_bushy() -> ThermoNeuron {
+    let mut n = ThermoNeuron::excitatory((0, 0));
+    // 低閾値: 単一 cochlea スパイク (60) で発火 (忠実中継)
+    n.threshold_base = 50;
+    // 中 leak: 短時間の積分のみ
+    n.leak = 10;
+    n.enthalpy_max = 10;
+    n.enthalpy_recovery_rate = 10;
+    // 中程度の entropy 適応: 持続発火で閾値上昇 → 立ち上がり強調 (notch)
+    n.entropy_per_spike = 40;
+    n.entropy_decay_rate = 1;
+    n.entropy_decay_interval = 5;  // 40 を 200 step (100ms) で散逸 → 100ms 周期で再オンセット検出
+    n.spontaneous_input = 0;
+    n.generates_entropy = true;
+    n
+}
+
+/// Stellate 細胞用 ThermoNeuron
+/// 隣接 ±1 帯域をプールし、 持続的な rate (chopper) を生成。 スペクトル包絡符号化。
+/// 低 leak で積分、 弱 entropy 適応で持続発火を維持。
+fn make_stellate() -> ThermoNeuron {
+    let mut n = ThermoNeuron::excitatory((0, 0));
+    // 中閾値: プール入力 (複数帯域) を積分して発火
+    n.threshold_base = 80;
+    // 低 leak: 時間方向に積分 (持続 rate を生む)
+    n.leak = 5;
+    n.enthalpy_max = 10;
+    n.enthalpy_recovery_rate = 10;
+    // 弱 entropy 適応: 持続発火を許可 (rate code)
+    n.entropy_per_spike = 5;
+    n.entropy_decay_rate = 1;
+    n.entropy_decay_interval = 50;
+    n.spontaneous_input = 0;
+    n.generates_entropy = true;
+    n
+}
+
 #[derive(Clone)]
 pub struct CochlearNucleus {
-    /// Octopus 細胞 (広帯域オンセット検出)
+    /// Octopus 細胞 (広帯域オンセット検出、 全帯域横断)
     pub octopus: Vec<ThermoNeuron>,
+    /// Bushy 細胞 (各帯域 忠実中継 + 立ち上がり強調)
+    pub bushy: Vec<ThermoNeuron>,
+    /// Stellate 細胞 (各帯域 隣接プール スペクトル包絡 rate)
+    pub stellate: Vec<ThermoNeuron>,
     pub current_time: i32,
 }
 
@@ -52,33 +103,53 @@ impl CochlearNucleus {
         let octopus: Vec<ThermoNeuron> = OCTOPUS_COINCIDENCE_TH.iter()
             .map(|&th| make_octopus(th))
             .collect();
-        Self { octopus, current_time: 0 }
+        let bushy: Vec<ThermoNeuron> = (0..N_BUSHY).map(|_| make_bushy()).collect();
+        let stellate: Vec<ThermoNeuron> = (0..N_STELLATE).map(|_| make_stellate()).collect();
+        Self { octopus, bushy, stellate, current_time: 0 }
     }
 
-    /// 1 step 処理
+    /// 1 step 処理 (3 ストリーム)
     /// cochlea_out: 蝸牛 20 帯域出力 (各 ch: 発火で FIRE_CURRENT、 他 0)
-    /// 戻り値: Octopus 出力 [N_OCTOPUS] (発火で FIRE_CURRENT、 他 0)
-    pub fn process_step(&mut self, cochlea_out: &[i32]) -> [i32; N_OCTOPUS] {
+    /// 戻り値: 44 ch [octopus 4 | bushy 20 | stellate 20] (発火で FIRE_CURRENT、 他 0)
+    pub fn process_step(&mut self, cochlea_out: &[i32]) -> [i32; N_CN_OUTPUT] {
         debug_assert_eq!(cochlea_out.len(), N_BANDS);
-        // 全帯域の総入力 (同時発火の強度)
-        let total_input: i32 = cochlea_out.iter().sum();
+        let t = self.current_time;
+        let mut out = [0i32; N_CN_OUTPUT];
 
-        let mut out = [0i32; N_OCTOPUS];
+        // (1) Octopus: 全帯域の総和を入力 (広帯域オンセット)
+        let total_input: i32 = cochlea_out.iter().sum();
         for (k, oct) in self.octopus.iter_mut().enumerate() {
-            // 各 Octopus は全帯域の総和を入力として受ける (広帯域横断)
-            if oct.update(total_input, self.current_time) {
+            if oct.update(total_input, t) {
                 out[k] = FIRE_CURRENT;
             }
         }
+
+        // (2) Bushy: 各帯域を 1:1 中継 (立ち上がり強調)
+        for ch in 0..N_BUSHY {
+            if self.bushy[ch].update(cochlea_out[ch], t) {
+                out[N_OCTOPUS + ch] = FIRE_CURRENT;
+            }
+        }
+
+        // (3) Stellate: 隣接 ±1 帯域プール (スペクトル包絡 rate)
+        for ch in 0..N_STELLATE {
+            let lo = ch.saturating_sub(1);
+            let hi = (ch + 1).min(N_BANDS - 1);
+            let pooled: i32 = (lo..=hi).map(|c| cochlea_out[c]).sum();
+            if self.stellate[ch].update(pooled, t) {
+                out[N_OCTOPUS + N_BUSHY + ch] = FIRE_CURRENT;
+            }
+        }
+
         self.current_time += 1;
         out
     }
 
     /// 試行間リセット (entropy は持ち越し、 Phase 2 と同じ方針)
     pub fn reset(&mut self) {
-        for n in &mut self.octopus {
-            n.reset_state();
-        }
+        for n in &mut self.octopus { n.reset_state(); }
+        for n in &mut self.bushy { n.reset_state(); }
+        for n in &mut self.stellate { n.reset_state(); }
     }
 }
 
@@ -97,7 +168,7 @@ mod tests {
         let mut strong = [0i32; N_BANDS];
         for i in 0..12 { strong[i] = FIRE_CURRENT; }
         let out = cn.process_step(&strong);
-        // 少なくとも低閾値 Octopus (th=3,5,8) は発火
+        // out[0..4] が Octopus。 少なくとも低閾値 (th=3,5) は発火
         assert!(out[0] > 0, "octopus[0] (th=3) should fire on 12-band onset");
         assert!(out[1] > 0, "octopus[1] (th=5) should fire");
     }
@@ -112,6 +183,26 @@ mod tests {
         let out = cn.process_step(&weak);
         // th=12 の Octopus[3] は発火しない (2 帯域では足りない)
         assert_eq!(out[3], 0, "octopus[3] (th=12) should be silent on 2-band input");
+    }
+
+    #[test]
+    fn bushy_relays_single_channel() {
+        let mut cn = CochlearNucleus::new();
+        // ch5 のみ発火 → Bushy[5] (out[N_OCTOPUS+5]) が中継発火
+        let mut single = [0i32; N_BANDS];
+        single[5] = FIRE_CURRENT;
+        let out = cn.process_step(&single);
+        assert!(out[N_OCTOPUS + 5] > 0, "bushy[5] should relay ch5 spike");
+        // 他の bushy は沈黙
+        assert_eq!(out[N_OCTOPUS + 0], 0, "bushy[0] should be silent");
+    }
+
+    #[test]
+    fn output_length_is_44() {
+        let mut cn = CochlearNucleus::new();
+        let out = cn.process_step(&[0i32; N_BANDS]);
+        assert_eq!(out.len(), N_CN_OUTPUT);
+        assert_eq!(N_CN_OUTPUT, 44);
     }
 
     #[test]
