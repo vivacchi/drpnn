@@ -24,4 +24,5 @@ pub mod topology;
 pub mod axon_growth;
 pub mod thermo_network;
 pub mod cochlea;
+pub mod cochlear_nucleus;
 pub mod phoneme_synth;
