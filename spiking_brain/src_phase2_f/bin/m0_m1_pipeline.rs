@@ -305,6 +305,64 @@ fn main() {
     println!("\n== Phase 3: 訓練後評価 (出力 layer 40) ==");
     evaluate(&mut net, &mut cochlea, &syllables, &waveforms, n_sample, "POST (output)");
 
+    // ─── Phase 3c: per-pair 混同分析 (M1 分解能仮説の検証) ───
+    // 各音素ペアについて「cochlea 入力 between」 vs 「M1 出力 between」 を比較
+    // 仮説: 似た入力ペア (ki/se) は M1 出力でも高 between (同一 basin に collapse)
+    println!("\n══════════════════════════════════════════════════════════");
+    println!("== Phase 3c: per-pair 混同分析 (M1 分解能仮説) ==");
+    println!("══════════════════════════════════════════════════════════");
+    {
+        let n_out = net.output_neurons.len();
+        let n_syl = syllables.len();
+        // 各音素の M1 出力平均 fingerprint (n_sample で平均)
+        let mut m1_mean_fp: Vec<Vec<f64>> = vec![Vec::new(); n_syl];
+        for si in 0..n_syl {
+            let mut acc: Vec<f64> = Vec::new();
+            for _ in 0..n_sample {
+                let log = present_syllable(&mut net, &mut cochlea, &waveforms[si]);
+                let fp = fingerprint(&log, n_out);
+                if acc.is_empty() { acc = vec![0.0; fp.len()]; }
+                for (a, v) in acc.iter_mut().zip(fp.iter()) { *a += v; }
+            }
+            for a in acc.iter_mut() { *a /= n_sample as f64; }
+            m1_mean_fp[si] = acc;
+        }
+        // cochlea 入力 fingerprint (20ch × 30bin、 cochlea_differentiation と同じ)
+        let mut coch_fp: Vec<Vec<f64>> = vec![Vec::new(); n_syl];
+        for si in 0..n_syl {
+            cochlea.reset();
+            let mut fp = vec![0.0f64; 20 * 30];
+            for step in 0..TRIAL_STEPS {
+                let s0 = step * SAMPLES_PER_STEP;
+                let mut samples = [0i32; SAMPLES_PER_STEP];
+                for i in 0..SAMPLES_PER_STEP {
+                    let idx = s0 + i;
+                    if idx < waveforms[si].len() { samples[i] = waveforms[si][idx]; }
+                }
+                let out = cochlea.process_step(&samples);
+                let bin = (step / 20).min(29);
+                for ch in 0..20.min(out.len()) {
+                    fp[ch * 30 + bin] += out[ch] as f64;
+                }
+            }
+            coch_fp[si] = fp;
+        }
+        println!("  ペア   | cochlea入力between | M1出力between | 変化");
+        println!("  -------|--------------------|---------------|------");
+        for i in 0..n_syl {
+            for j in (i+1)..n_syl {
+                let coch_b = cosine_similarity(&coch_fp[i], &coch_fp[j]);
+                let m1_b = cosine_similarity(&m1_mean_fp[i], &m1_mean_fp[j]);
+                let arrow = if m1_b > coch_b + 0.1 { "↑混同増" }
+                            else if m1_b < coch_b - 0.1 { "↓分離" }
+                            else { "≈維持" };
+                println!("  {}-{}  |      {:.3}        |    {:.3}      | {}",
+                    syllables[i].label, syllables[j].label, coch_b, m1_b, arrow);
+            }
+        }
+        println!("  → 入力が似たペア (ki-se 等) が M1 で「↑混同増」 なら分解能オーバー仮説を支持");
+    }
+
     // ─── Phase 3b: 内部 layer 評価 (§5.12.3a で発見した上澄み問題への対処) ───
     println!("\n══════════════════════════════════════════════════════════");
     println!("== Phase 3b: 内部 420 ニューロン全体での再評価 ==");
