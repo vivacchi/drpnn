@@ -297,8 +297,18 @@ pub fn standard_syllables() -> [Syllable; 5] {
 /// 音節を合成. 子音 (30ms) + 母音 (170ms) = 200ms.
 /// 戻り値: 16kHz / i32 (i16 範囲) の波形.
 pub fn synth_syllable(syl: &Syllable, noise: &mut LfsrNoise) -> Vec<i32> {
-    let consonant_ms = 30.0;
-    let vowel_ms = 170.0;
+    synth_syllable_scaled(syl, noise, 1.0)
+}
+
+/// 時間圧縮版: duration を speed 倍だけ短縮 (formant 周波数は保持)。
+/// speed=1.0 で標準 (200ms)、 speed=3.0 で 67ms (STDP 因果窓 80ms 内に収まる)。
+///
+/// 「入力を速める」 仮説の検証用。 ピッチ (resampling) ではなく duration 短縮なので
+/// formant 周波数は変わらず、 cochlea 帯域から外れない。 音素を STDP 窓に収め、
+/// 「音素全体を 1 つの因果イベントとして M1 が学習できるか」 を試す。
+pub fn synth_syllable_scaled(syl: &Syllable, noise: &mut LfsrNoise, speed: f64) -> Vec<i32> {
+    let consonant_ms = 30.0 / speed;
+    let vowel_ms = 170.0 / speed;
     let mut wave = synth_consonant(syl.consonant, consonant_ms, noise);
     let vowel_wave = synth_vowel(&syl.vowel, vowel_ms);
     wave.extend(vowel_wave);

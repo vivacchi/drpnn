@@ -16,7 +16,7 @@ use spiking_brain::phase2_f::thermo_network::{ThermoNetwork, ThermoNetworkConfig
 use spiking_brain::phase2_f::cochlea::{Cochlea, SAMPLES_PER_STEP};
 use spiking_brain::phase2_f::cochlear_nucleus::CochlearNucleus;
 use spiking_brain::phase2_f::phoneme_synth::{
-    standard_syllables, synth_syllable, LfsrNoise, Syllable,
+    standard_syllables, synth_syllable_scaled, LfsrNoise, Syllable,
 };
 use spiking_brain::trace::{cosine_similarity, OutputTrace};
 use rand::prelude::*;
@@ -163,6 +163,8 @@ fn perpair(
 
 fn main() {
     let n_train: usize = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(100);
+    // CLI 第 2 引数: 音素の時間圧縮速度 (1.0 標準 200ms、 3.0 で 67ms = STDP 窓内)
+    let speed: f64 = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(1.0);
     let n_sample = 20;
     let snap_interval = if n_train >= 500 { 500 } else { (n_train / 10).max(10) };
 
@@ -171,6 +173,7 @@ fn main() {
     println!("  M0.5: Octopus 4 + Bushy 20 + Stellate 20 = 44ch (3 細胞型 信号分解)");
     println!("  M1:   44 入力 → 40 出力 (grid 20×23)");
     println!("  音素: pa, ki, tu, se, mo");
+    println!("  ★ 時間圧縮速度: {}x (音素長 {:.0}ms、 STDP 窓 80ms)", speed, 200.0 / speed);
 
     let cfg = ThermoNetworkConfig::for_m1_cn();
     let mut net = ThermoNetwork::new(cfg);
@@ -178,8 +181,24 @@ fn main() {
     let mut cn = CochlearNucleus::new();
     let syllables = standard_syllables();
     let mut noise = LfsrNoise::new(0xACE1);
+    // 圧縮音素を生成し、 trial (300ms=4800sample) を埋めるよう反復 tile
+    // speed=1: 200ms 音素 ×1 (+100ms 無音、 従来)、 speed=3: 67ms 音素を ~4 回反復
+    let trial_samples = (TRIAL_DURATION_MS * 16000.0 / 1000.0) as usize;  // 4800
     let waveforms: Vec<Vec<i32>> = syllables.iter()
-        .map(|s| synth_syllable(s, &mut noise)).collect();
+        .map(|s| {
+            let base = synth_syllable_scaled(s, &mut noise, speed);
+            if speed <= 1.0 {
+                base  // 従来通り (tile しない)
+            } else {
+                // 圧縮音素を trial 長まで反復 tile (反復曝露)
+                let mut tiled = Vec::with_capacity(trial_samples);
+                while tiled.len() < trial_samples {
+                    tiled.extend_from_slice(&base);
+                }
+                tiled.truncate(trial_samples);
+                tiled
+            }
+        }).collect();
 
     println!("\n  M1: neurons={}, synapses={} (in={}, out={})",
         net.n_neurons(), net.n_synapses(), net.input_neurons.len(), net.output_neurons.len());
