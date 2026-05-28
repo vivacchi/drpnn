@@ -193,6 +193,11 @@ fn main() {
     let n_train: usize = std::env::args().nth(1)
         .and_then(|s| s.parse().ok())
         .unwrap_or(100);
+    // CLI 第 2 引数: 発火閾値の個体差 std (Vth 多様性、 DRAM 物理モデル移植)
+    // 0 = 既存 (全ニューロン同一閾値)、 12 = DRAM 相当 (threshold_base 80 の 15%)
+    let threshold_diversity_std: i32 = std::env::args().nth(2)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
 
     let n_sample: usize = 20;
     let snap_interval: usize = if n_train >= 100_000 {
@@ -209,10 +214,15 @@ fn main() {
     println!("  M1: Fork F-G1-R1 v2 (8 近傍, 1セル1ニューロン)");
     println!("  評価: 時間 bin 化 fingerprint (40 出力 × 30 bin)");
 
-    let cfg = ThermoNetworkConfig::default();
+    let mut cfg = ThermoNetworkConfig::default();
     // UP/DOWN は dense 音素入力では崩壊する (POST -0.009、§5.12.7-A 条件付き)
     // → m0_m1_pipeline では OFF (sparse 入力向け M1 単体実験でのみ有効)
     println!("  UP/DOWN 状態: 無効 (dense 入力では過剰刺激になる、§5.12.7-A 検証結果)");
+    cfg.threshold_diversity_std = threshold_diversity_std;
+    if threshold_diversity_std > 0 {
+        println!("  ★ Vth 多様性: threshold_base に N(0, {}) を加算 (DRAM 物理モデル移植)",
+            threshold_diversity_std);
+    }
     let cfg_for_print = cfg.clone();
     let mut net = ThermoNetwork::new(cfg);
     let mut cochlea = Cochlea::new();

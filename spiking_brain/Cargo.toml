@@ -107,6 +107,11 @@ path = "src_phase2_f/bin/m0_m1_m2_pipeline.rs"
 name = "m0_m1_m2_pipeline_v2"
 path = "src_phase2_f/bin/m0_m1_m2_pipeline_v2.rs"
 
+# Phase 2 Fork F: M0 蝸牛出力の音素間分化度診断 (上流/下流の切り分け)
+[[bin]]
+name = "cochlea_differentiation"
+path = "src_phase2_f/bin/cochlea_differentiation.rs"
+
 # Phase 3: M0 蝸牛 → M1 3D HCP 配置版 パイプライン (2D 版との直接比較用)
 [[bin]]
 name = "m0_m1_3d_pipeline"

@@ -10,6 +10,7 @@ use super::thermo_neuron::ThermoNeuron;
 use super::thermo_synapse::{ThermoSynapse, OPEN_THRESHOLD};
 use super::topology::Topology;
 use rand::prelude::*;
+use rand_distr::Normal;
 use rayon::prelude::*;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -64,6 +65,10 @@ pub struct ThermoNetworkConfig {
     /// 因果窓と spike_trace 持続時間 (M1: 160 step / 80ms、 M2: 320 step / 160ms)
     /// 設計書 M2_A2_DESIGN.md §2.4 に基づく階層別時間スケール
     pub causal_window: i32,
+    /// 発火閾値の個体差 (Vth ばらつき、 DRAM 物理モデルの核心を移植)
+    /// 0 で既存動作 (全ニューロン同一閾値)、 >0 で Gaussian N(0, std) を threshold_base に加算
+    /// 生物の閾値多様性 / DRAM 製造ばらつきに対応、 分化 (differentiation) を促進
+    pub threshold_diversity_std: i32,
 }
 
 impl Default for ThermoNetworkConfig {
@@ -88,6 +93,7 @@ impl Default for ThermoNetworkConfig {
             enable_up_down: false, // デフォルト OFF (既存実験との互換性、有効化は明示的に)
             io_layout: None, // デフォルト rigid (M1 互換)
             causal_window: 160, // M1 デフォルト (80ms)
+            threshold_diversity_std: 0, // デフォルト OFF (全ニューロン同一閾値、 既存互換)
         }
     }
 }
@@ -130,6 +136,7 @@ impl ThermoNetworkConfig {
             enable_up_down: false,
             io_layout: Some(IoLayout { input_positions, output_positions }),
             causal_window: 320,  // M2 = 160ms 因果窓 (音節スケール、 M2_A2_DESIGN.md §2.4)
+            threshold_diversity_std: 0,  // M2 でも default OFF (実験で明示的に設定)
         }
     }
 }
@@ -397,6 +404,18 @@ impl ThermoNetwork {
         }
         for s in &mut synapses {
             s.causal_window = config.causal_window;
+        }
+
+        // 発火閾値の個体差 (Vth ばらつき、 DRAM 物理モデルの核心移植)
+        // 別 rng を使い、 シナプス配置の RNG 系列を乱さない (std=0 で完全後方互換)
+        if config.threshold_diversity_std > 0 {
+            let mut th_rng = StdRng::seed_from_u64(config.seed.wrapping_add(99999));
+            let normal = Normal::new(0.0, config.threshold_diversity_std as f64).unwrap();
+            for n in &mut neurons {
+                let offset = normal.sample(&mut th_rng).round() as i32;
+                // 閾値は最低 10 を保証 (負や極小を防ぐ)
+                n.threshold_base = (n.threshold_base + offset).max(10);
+            }
         }
 
         // out_syn / in_syn の構築
