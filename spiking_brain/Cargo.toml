@@ -127,6 +127,11 @@ path = "src_phase2_f/bin/m0_cn_m1_pipeline.rs"
 name = "m0_cn_m1_m2_pipeline"
 path = "src_phase2_f/bin/m0_cn_m1_m2_pipeline.rs"
 
+# Phase 2 Fork F: M1 に SHA-256 ハッシュを入力する実験 (高エントロピー入力応答)
+[[bin]]
+name = "m1_hash_probe"
+path = "src_phase2_f/bin/m1_hash_probe.rs"
+
 # Phase 3: M0 蝸牛 → M1 3D HCP 配置版 パイプライン (2D 版との直接比較用)
 [[bin]]
 name = "m0_m1_3d_pipeline"

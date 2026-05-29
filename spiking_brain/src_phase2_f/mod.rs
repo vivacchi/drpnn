@@ -26,3 +26,4 @@ pub mod thermo_network;
 pub mod cochlea;
 pub mod cochlear_nucleus;
 pub mod phoneme_synth;
+pub mod sha256;
