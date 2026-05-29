@@ -122,6 +122,11 @@ path = "src_phase2_f/bin/octopus_probe.rs"
 name = "m0_cn_m1_pipeline"
 path = "src_phase2_f/bin/m0_cn_m1_pipeline.rs"
 
+# Phase 2 Fork F: M0 → M0.5 → M1 → M2 4 段 (改善 M1 上で M2 再挑戦)
+[[bin]]
+name = "m0_cn_m1_m2_pipeline"
+path = "src_phase2_f/bin/m0_cn_m1_m2_pipeline.rs"
+
 # Phase 3: M0 蝸牛 → M1 3D HCP 配置版 パイプライン (2D 版との直接比較用)
 [[bin]]
 name = "m0_m1_3d_pipeline"
