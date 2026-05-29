@@ -136,3 +136,8 @@ path = "src_phase3_3d/bin/m1_3d_whitenoise.rs"
 [[bin]]
 name = "m0_m1_dram_pipeline"
 path = "src_phase2_dram/bin/m0_m1_dram_pipeline.rs"
+
+# Phase 2 DRAM: サーモメータ読み出し 物理検証 (二値 SA + WL 本数で多値化)
+[[bin]]
+name = "dram_thermometer_probe"
+path = "src_phase2_dram/bin/dram_thermometer_probe.rs"

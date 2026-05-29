@@ -19,3 +19,4 @@ pub mod dram_cell;
 pub mod dram_synapse;
 pub mod ring_buffer;
 pub mod dram_network;
+pub mod bitline_physics;
