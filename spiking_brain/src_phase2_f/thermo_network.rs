@@ -69,6 +69,11 @@ pub struct ThermoNetworkConfig {
     /// 0 で既存動作 (全ニューロン同一閾値)、 >0 で Gaussian N(0, std) を threshold_base に加算
     /// 生物の閾値多様性 / DRAM 製造ばらつきに対応、 分化 (differentiation) を促進
     pub threshold_diversity_std: i32,
+    /// conductance 自然減衰の周期 (step)。 デフォルト 1000 (500ms)。
+    /// 大きくすると痕跡が長持ち → 提示間隔より遅ければ音素固有構造が累積 (時間スケール整合)
+    pub conductance_decay_interval: i32,
+    /// vitality 自然減衰の周期 (step)。 デフォルト 10000 (5s)。
+    pub vitality_decay_interval: i32,
 }
 
 impl Default for ThermoNetworkConfig {
@@ -94,6 +99,8 @@ impl Default for ThermoNetworkConfig {
             io_layout: None, // デフォルト rigid (M1 互換)
             causal_window: 160, // M1 デフォルト (80ms)
             threshold_diversity_std: 0, // デフォルト OFF (全ニューロン同一閾値、 既存互換)
+            conductance_decay_interval: 1000,  // デフォルト 500ms (既存互換)
+            vitality_decay_interval: 10000,    // デフォルト 5s (既存互換)
         }
     }
 }
@@ -135,6 +142,8 @@ impl ThermoNetworkConfig {
             io_layout: Some(IoLayout { input_positions, output_positions }),
             causal_window: 160,
             threshold_diversity_std: 0,
+            conductance_decay_interval: 1000,
+            vitality_decay_interval: 10000,
         }
     }
 
@@ -176,6 +185,8 @@ impl ThermoNetworkConfig {
             io_layout: Some(IoLayout { input_positions, output_positions }),
             causal_window: 320,  // M2 = 160ms 因果窓 (音節スケール、 M2_A2_DESIGN.md §2.4)
             threshold_diversity_std: 0,  // M2 でも default OFF (実験で明示的に設定)
+            conductance_decay_interval: 1000,
+            vitality_decay_interval: 10000,
         }
     }
 }
@@ -443,6 +454,8 @@ impl ThermoNetwork {
         }
         for s in &mut synapses {
             s.causal_window = config.causal_window;
+            s.decay_interval = config.conductance_decay_interval;
+            s.vit_decay_interval = config.vitality_decay_interval;
         }
 
         // 発火閾値の個体差 (Vth ばらつき、 DRAM 物理モデルの核心移植)
@@ -669,8 +682,12 @@ impl ThermoNetwork {
                 &self.position_index,
             );
             let cw = self.config.causal_window;
+            let cdi = self.config.conductance_decay_interval;
+            let vdi = self.config.vitality_decay_interval;
             for new_idx in prev_total..self.synapses.len() {
                 self.synapses[new_idx].causal_window = cw;  // 階層別 causal_window 伝播
+                self.synapses[new_idx].decay_interval = cdi;
+                self.synapses[new_idx].vit_decay_interval = vdi;
                 let s = &self.synapses[new_idx];
                 self.out_syn[s.pre].push(new_idx);
                 self.in_syn[s.post].push(new_idx);
@@ -770,10 +787,14 @@ impl ThermoNetwork {
                 &self.topology,
                 &self.position_index,
             );
-            // 新規シナプスのインデックスを out_syn / in_syn に登録 + causal_window 伝播
+            // 新規シナプスのインデックスを out_syn / in_syn に登録 + 階層別パラメータ伝播
             let cw = self.config.causal_window;
+            let cdi = self.config.conductance_decay_interval;
+            let vdi = self.config.vitality_decay_interval;
             for new_idx in prev_total..self.synapses.len() {
                 self.synapses[new_idx].causal_window = cw;  // 階層別 (M2=320)
+                self.synapses[new_idx].decay_interval = cdi;
+                self.synapses[new_idx].vit_decay_interval = vdi;
                 let s = &self.synapses[new_idx];
                 self.out_syn[s.pre].push(new_idx);
                 self.in_syn[s.post].push(new_idx);

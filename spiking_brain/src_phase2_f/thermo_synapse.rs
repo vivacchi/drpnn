@@ -81,6 +81,11 @@ pub struct ThermoSynapse {
     /// 因果窓 (この値より小さい spike_trace が「最近発火」 と判定される)
     /// M1: 160 step (80ms)、 M2: 320 step (160ms 音節スケール)
     pub causal_window: i32,
+    /// conductance 自然減衰の周期 (この step 数ごとに -1)。 大きいほど痕跡が長持ち
+    /// デフォルト 1000 (500ms)。 提示間隔より遅くすると音素固有構造が累積 (時間スケール整合)
+    pub decay_interval: i32,
+    /// vitality 自然減衰の周期 (この step 数ごとに -1)。 デフォルト 10000 (5s)
+    pub vit_decay_interval: i32,
 }
 
 impl ThermoSynapse {
@@ -97,6 +102,8 @@ impl ThermoSynapse {
             decay_counter: 0,
             vitality_counter: 0,
             causal_window: CAUSAL_WINDOW,  // M1 default、 M2 では 320 に書き換える
+            decay_interval: DECAY_INTERVAL,            // default 1000、 config で上書き
+            vit_decay_interval: VITALITY_DECAY_INTERVAL, // default 10000、 config で上書き
         }
     }
 
@@ -133,7 +140,7 @@ impl ThermoSynapse {
         if !self.alive { return; }
         // conductance の自然減衰 (機能的弱化、ただし 0 までは下がる)
         self.decay_counter += 1;
-        if self.decay_counter >= DECAY_INTERVAL {
+        if self.decay_counter >= self.decay_interval {
             self.decay_counter = 0;
             if self.conductance > 0 {
                 self.conductance -= 1;
@@ -141,7 +148,7 @@ impl ThermoSynapse {
         }
         // vitality の自然減衰 (構造的忘却)
         self.vitality_counter += 1;
-        if self.vitality_counter >= VITALITY_DECAY_INTERVAL {
+        if self.vitality_counter >= self.vit_decay_interval {
             self.vitality_counter = 0;
             if self.vitality > 0 {
                 self.vitality -= 1;

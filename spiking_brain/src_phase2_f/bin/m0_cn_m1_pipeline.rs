@@ -165,6 +165,9 @@ fn main() {
     let n_train: usize = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(100);
     // CLI 第 2 引数: 音素の時間圧縮速度 (1.0 標準 200ms、 3.0 で 67ms = STDP 窓内)
     let speed: f64 = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(1.0);
+    // CLI 第 3 引数: 減衰遅延倍率 (1 標準、 10 で conductance/vitality 減衰を 10x 遅く)
+    // 時間スケール整合のもう半分: 痕跡を提示間隔より長持ちさせ音素固有構造を累積
+    let decay_slow: i32 = std::env::args().nth(3).and_then(|s| s.parse().ok()).unwrap_or(1);
     let n_sample = 20;
     let snap_interval = if n_train >= 500 { 500 } else { (n_train / 10).max(10) };
 
@@ -175,7 +178,13 @@ fn main() {
     println!("  音素: pa, ki, tu, se, mo");
     println!("  ★ 時間圧縮速度: {}x (音素長 {:.0}ms、 STDP 窓 80ms)", speed, 200.0 / speed);
 
-    let cfg = ThermoNetworkConfig::for_m1_cn();
+    let mut cfg = ThermoNetworkConfig::for_m1_cn();
+    if decay_slow > 1 {
+        cfg.conductance_decay_interval *= decay_slow;
+        cfg.vitality_decay_interval *= decay_slow;
+        println!("  ★ 減衰 {}x 遅延: conductance {}step, vitality {}step",
+            decay_slow, cfg.conductance_decay_interval, cfg.vitality_decay_interval);
+    }
     let mut net = ThermoNetwork::new(cfg);
     let mut cochlea = Cochlea::new();
     let mut cn = CochlearNucleus::new();
