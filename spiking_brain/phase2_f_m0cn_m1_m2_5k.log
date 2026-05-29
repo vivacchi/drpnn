@@ -1,0 +1,181 @@
+warning: unused import: `GROWTH_THRESHOLD`
+ --> src\..\src_phase2\thermo_network.rs:7:45
+  |
+7 |     axon_growth_step, build_position_index, GROWTH_THRESHOLD,
+  |                                             ^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `VecDeque`
+  --> src\..\src_phase2\thermo_network.rs:14:33
+   |
+14 | use std::collections::{HashMap, VecDeque};
+   |                                 ^^^^^^^^
+
+warning: unused import: `GROWTH_THRESHOLD`
+ --> src\..\src_phase2_a\thermo_network.rs:7:45
+  |
+7 |     axon_growth_step, build_position_index, GROWTH_THRESHOLD,
+  |                                             ^^^^^^^^^^^^^^^^
+
+warning: unused import: `VecDeque`
+  --> src\..\src_phase2_a\thermo_network.rs:14:33
+   |
+14 | use std::collections::{HashMap, VecDeque};
+   |                                 ^^^^^^^^
+
+warning: unused import: `GROWTH_THRESHOLD`
+ --> src\..\src_phase2_b\thermo_network.rs:7:45
+  |
+7 |     axon_growth_step, build_position_index, GROWTH_THRESHOLD,
+  |                                             ^^^^^^^^^^^^^^^^
+
+warning: unused import: `VecDeque`
+  --> src\..\src_phase2_b\thermo_network.rs:14:33
+   |
+14 | use std::collections::{HashMap, VecDeque};
+   |                                 ^^^^^^^^
+
+warning: unused import: `GROWTH_THRESHOLD`
+ --> src\..\src_phase2_c\thermo_network.rs:7:45
+  |
+7 |     axon_growth_step, build_position_index, GROWTH_THRESHOLD,
+  |                                             ^^^^^^^^^^^^^^^^
+
+warning: unused import: `VecDeque`
+  --> src\..\src_phase2_c\thermo_network.rs:14:33
+   |
+14 | use std::collections::{HashMap, VecDeque};
+   |                                 ^^^^^^^^
+
+warning: unused import: `GROWTH_THRESHOLD`
+ --> src\..\src_phase2_d\thermo_network.rs:7:45
+  |
+7 |     axon_growth_step, build_position_index, GROWTH_THRESHOLD,
+  |                                             ^^^^^^^^^^^^^^^^
+
+warning: unused import: `OPEN_THRESHOLD`
+  --> src\..\src_phase2_d\thermo_network.rs:10:44
+   |
+10 | use super::thermo_synapse::{ThermoSynapse, OPEN_THRESHOLD};
+   |                                            ^^^^^^^^^^^^^^
+
+warning: unused import: `VecDeque`
+  --> src\..\src_phase2_d\thermo_network.rs:14:33
+   |
+14 | use std::collections::{HashMap, VecDeque};
+   |                                 ^^^^^^^^
+
+warning: unused import: `GROWTH_THRESHOLD`
+ --> src\..\src_phase2_e\thermo_network.rs:7:45
+  |
+7 |     axon_growth_step, build_position_index, GROWTH_THRESHOLD,
+  |                                             ^^^^^^^^^^^^^^^^
+
+warning: unused import: `VecDeque`
+  --> src\..\src_phase2_e\thermo_network.rs:14:33
+   |
+14 | use std::collections::{HashMap, VecDeque};
+   |                                 ^^^^^^^^
+
+warning: unused import: `GROWTH_THRESHOLD`
+ --> src\..\src_phase2_f\thermo_network.rs:7:45
+  |
+7 |     axon_growth_step, build_position_index, GROWTH_THRESHOLD,
+  |                                             ^^^^^^^^^^^^^^^^
+
+warning: unused import: `VecDeque`
+  --> src\..\src_phase2_f\thermo_network.rs:15:33
+   |
+15 | use std::collections::{HashMap, VecDeque};
+   |                                 ^^^^^^^^
+
+warning: method `accumulate_eligibility` is never used
+   --> src\network.rs:393:8
+    |
+124 | impl Network {
+    | ------------ method in this implementation
+...
+393 |     fn accumulate_eligibility(&mut self, s_idx: usize, delta: f64) {
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `is_inh` is never read
+   --> src\binary_network.rs:162:5
+    |
+148 | pub struct BinaryNetwork {
+    |            ------------- field in this struct
+...
+162 |     is_inh: Vec<bool>,
+    |     ^^^^^^
+
+warning: method `accumulate_eligibility` is never used
+   --> src\binary_network.rs:366:8
+    |
+169 | impl BinaryNetwork {
+    | ------------------ method in this implementation
+...
+366 |     fn accumulate_eligibility(&mut self, s_idx: usize, delta: f32) {
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variable `zN_w` should have a snake case name
+   --> src\..\src_phase3_3d\thermo_network_3d.rs:112:14
+    |
+112 |         let (zN_w, zN_h) = layer_grids[(grid_d - 1) as usize];
+    |              ^^^^ help: convert the identifier to snake case: `z_n_w`
+    |
+    = note: `#[warn(non_snake_case)]` (part of `#[warn(nonstandard_style)]`) on by default
+
+warning: variable `zN_h` should have a snake case name
+   --> src\..\src_phase3_3d\thermo_network_3d.rs:112:20
+    |
+112 |         let (zN_w, zN_h) = layer_grids[(grid_d - 1) as usize];
+    |                    ^^^^ help: convert the identifier to snake case: `z_n_h`
+
+warning: variable `zN_w` should have a snake case name
+   --> src\..\src_phase3_3d\thermo_network_3d.rs:318:22
+    |
+318 |                 let (zN_w, zN_h) = layer_grids[(config.grid_d - 1) as usize];
+    |                      ^^^^ help: convert the identifier to snake case: `z_n_w`
+
+warning: variable `zN_h` should have a snake case name
+   --> src\..\src_phase3_3d\thermo_network_3d.rs:318:28
+    |
+318 |                 let (zN_w, zN_h) = layer_grids[(config.grid_d - 1) as usize];
+    |                            ^^^^ help: convert the identifier to snake case: `z_n_h`
+
+warning: `spiking_brain` (lib) generated 22 warnings (run `cargo fix --lib -p spiking_brain` to apply 15 suggestions)
+    Finished `release` profile [optimized] target(s) in 0.07s
+     Running `target\release\m0_cn_m1_m2_pipeline.exe 5000 3 30`
+== M0 → M0.5 蝸牛神経核 → M1 → M2 4 段パイプライン ==
+  cochlea(20) → CN(44) → M1(44→40) → M2(40→20)
+  speed=3, decay_slow=30 (§5.14 最適を M1/M2 両方に)
+
+  M1: 460 neurons, 18800 syn | M2: 440 neurons, 17680 syn
+
+== Phase 1: 訓練前評価 ==
+
+  -- PRE --
+    M1 (40出力): sel=0.257 (within 0.548 - between 0.290) active=40/40
+    M2 (20出力): sel=0.029 (within 0.462 - between 0.433) active=20/20
+
+== Phase 2: 訓練 5000 試行 ==
+  trial   500: M1 open=20035 cond_μ=37.5 | M2 open=18844 cond_μ=36.8
+  trial  1000: M1 open=20042 cond_μ=31.1 | M2 open=18844 cond_μ=29.5
+  trial  1500: M1 open=20050 cond_μ=25.3 | M2 open=18844 cond_μ=23.1
+  trial  2000: M1 open=20055 cond_μ=20.4 | M2 open=18844 cond_μ=17.6
+  trial  2500: M1 open=20060 cond_μ=16.6 | M2 open=18844 cond_μ=13.3
+  trial  3000: M1 open=20062 cond_μ=14.1 | M2 open=18844 cond_μ=10.1
+  trial  3500: M1 open=20064 cond_μ=12.4 | M2 open=18844 cond_μ=8.0
+  trial  4000: M1 open=20065 cond_μ=11.4 | M2 open=18844 cond_μ=6.5
+  trial  4500: M1 open=20065 cond_μ=11.4 | M2 open=18844 cond_μ=5.7
+  trial  5000: M1 open=20065 cond_μ=11.4 | M2 open=18844 cond_μ=5.3
+
+== Phase 3: 訓練後評価 ==
+
+  -- POST --
+    M1 (40出力): sel=0.516 (within 0.864 - between 0.347) active=19/40
+    M2 (20出力): sel=0.236 (within 0.986 - between 0.750) active=5/20
+
+  M1 軸索成長 1265 刈り取り 0 | M2 軸索成長 1164 刈り取り 0
