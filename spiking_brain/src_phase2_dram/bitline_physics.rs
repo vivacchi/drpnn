@@ -94,6 +94,28 @@ impl Bitline {
     pub fn total_charge(&self) -> f64 {
         self.cells.iter().sum()
     }
+
+    /// 参照ランプ ADC (single-slope): 単一「膜電位セル」 V_data を、
+    /// 増やしていく参照セル群 (全て V_hi) と電荷共有で比較。
+    /// SA が flip する参照セル本数 N = V_data の多値符号。
+    ///
+    /// 物理: ビット線を Vlow にプリチャージ、 data セル + N 参照セルを活性化:
+    ///   V_N = (Cbl·Vlow + Cs·V_data + Cs·N·V_hi) / (Cbl + (1+N)·Cs)
+    /// V_N > Vref で flip。 解くと N_flip は V_data に線形・単調 (高 V_data → 小 N)。
+    ///
+    /// 分解能は (V_hi − Vref) で決まる (小さいほど細かい = 多ビット)。
+    ///
+    /// 戻り値: flip した参照セル本数 (= ADC コード)、 max_refs まで flip しなければ None
+    pub fn reference_ramp_read(
+        &self, v_data: f64, v_hi: f64, vlow: f64, vref: f64, max_refs: usize,
+    ) -> Option<usize> {
+        for n in 0..=max_refs {
+            let v = (self.cbl * vlow + CS * v_data + CS * n as f64 * v_hi)
+                / (self.cbl + (1 + n) as f64 * CS);
+            if v > vref { return Some(n); }
+        }
+        None
+    }
 }
 
 #[cfg(test)]
