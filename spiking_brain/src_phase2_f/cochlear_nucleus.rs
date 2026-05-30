@@ -10,7 +10,7 @@
 //!   - Bushy (20):  周波数別 忠実中継 + 立ち上がり強調 (entropy 適応が notch を生む)
 //!   - Stellate (20): 周波数別 スペクトル包絡 rate (隣接 ±1 プール、 chopper)
 //!
-//! 出力: 44 ch (4 + 20 + 20) を M1 入力へ。
+//! 出力: 4 + N_BANDS + N_BANDS ch (N_BANDS=20 → 44、 N_BANDS=40 → 84) を M1 入力へ。
 
 use super::thermo_neuron::ThermoNeuron;
 use super::cochlea::{N_BANDS, FIRE_CURRENT};
@@ -22,7 +22,7 @@ pub const N_BUSHY: usize = N_BANDS;
 /// Stellate 細胞数 (各帯域に 1)
 pub const N_STELLATE: usize = N_BANDS;
 /// 蝸牛神経核の総出力チャネル数
-pub const N_CN_OUTPUT: usize = N_OCTOPUS + N_BUSHY + N_STELLATE;  // 4 + 20 + 20 = 44
+pub const N_CN_OUTPUT: usize = N_OCTOPUS + N_BUSHY + N_STELLATE;  // 4 + N_BANDS + N_BANDS
 /// 各 Octopus の同時発火閾値 (帯域数): 3, 5, 8, 12 帯域同時で段階的に発火
 pub const OCTOPUS_COINCIDENCE_TH: [i32; N_OCTOPUS] = [3, 5, 8, 12];
 
@@ -198,11 +198,11 @@ mod tests {
     }
 
     #[test]
-    fn output_length_is_44() {
+    fn output_length_matches_config() {
         let mut cn = CochlearNucleus::new();
         let out = cn.process_step(&[0i32; N_BANDS]);
         assert_eq!(out.len(), N_CN_OUTPUT);
-        assert_eq!(N_CN_OUTPUT, 44);
+        assert_eq!(N_CN_OUTPUT, N_OCTOPUS + 2 * N_BANDS);
     }
 
     #[test]

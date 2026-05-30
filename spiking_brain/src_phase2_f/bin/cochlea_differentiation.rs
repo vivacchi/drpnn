@@ -12,14 +12,14 @@
 //!
 //! 比較対象: M1 出力の between (M0+M1 5K で 0.600)
 
-use spiking_brain::phase2_f::cochlea::{Cochlea, SAMPLES_PER_STEP};
+use spiking_brain::phase2_f::cochlea::{Cochlea, SAMPLES_PER_STEP, N_BANDS};
 use spiking_brain::phase2_f::phoneme_synth::{standard_syllables, synth_syllable, LfsrNoise};
 use spiking_brain::trace::cosine_similarity;
 
 const TRIAL_DURATION_MS: f64 = 300.0;
 const DT_MS: f64 = 0.5;
 const TRIAL_STEPS: usize = (TRIAL_DURATION_MS / DT_MS) as usize;  // 600
-const N_CH: usize = 20;
+const N_CH: usize = N_BANDS;  // 蝸牛のチャネル数に追従 (20→40 変更時も自動)
 const N_BINS: usize = 30;  // 10ms bin
 const STEPS_PER_BIN: usize = TRIAL_STEPS / N_BINS;  // 20
 
@@ -68,8 +68,8 @@ fn channel_totals(cochlea: &mut Cochlea, waveform: &[i32]) -> Vec<i64> {
 
 fn main() {
     println!("== M0 蝸牛出力 音素間分化度診断 ==");
-    println!("  5 音素を cochlea に通し、 20ch×30bin fingerprint の音素間 cosine を測定");
-    println!("  比較: M1 出力 between = 0.600 (M0+M1 5K)");
+    println!("  5 音素を 蝸牛 に通し、 {}ch×{}bin フィンガープリント の音素間 cosine を測定", N_CH, N_BINS);
+    println!("  比較: M1 出力 between = 0.600 (M0+M1 5K、 20ch 時代の値)");
 
     let syllables = standard_syllables();
     let mut noise = LfsrNoise::new(0xACE1);

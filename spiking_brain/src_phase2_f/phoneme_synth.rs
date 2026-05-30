@@ -225,8 +225,13 @@ pub fn synth_consonant(c: Consonant, duration_ms: f64, noise: &mut LfsrNoise) ->
         }
         Consonant::Nasal { f1, f2 } => {
             // 低周波 2 フォルマント
+            //
+            // 振幅校正 (2026-05-30 修正):
+            //   旧 [3000, 1500] (peak 4500) → 蝸牛 firing threshold 200 (純音 amp 8000 想定) 未満で
+            //   全帯域取りこぼし発生。 他音素は Plosive/Fricative peak ~32768、 Vowel peak ~8000。
+            //   新 [6000, 3000] (peak 9000) で 母音 と同等の cochlea 反応を確保。
             let ps = [freq_to_phase_step(f1), freq_to_phase_step(f2)];
-            let amps = [3000i32, 1500];
+            let amps = [6000i32, 3000];
             let mut phases = [0u32; 2];
             let ramp = ((5.0 * SAMPLE_RATE_HZ / 1000.0) as usize).min(n_samples / 4);
             for i in 0..n_samples {

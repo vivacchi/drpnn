@@ -172,13 +172,13 @@ fn main() {
     let snap_interval = if n_train >= 500 { 500 } else { (n_train / 10).max(10) };
 
     println!("== M0 蝸牛 → M0.5 蝸牛神経核 → M1 パイプライン ==");
-    println!("  M0:   20 帯域蝸牛");
-    println!("  M0.5: Octopus 4 + Bushy 20 + Stellate 20 = 44ch (3 細胞型 信号分解)");
-    println!("  M1:   44 入力 → 40 出力 (grid 20×23)");
+    println!("  M0:   40 帯域蝸牛 (旧 20→40 拡張、 ki/se 分化改善)");
+    println!("  M0.5: Octopus 4 + Bushy 40 + Stellate 40 = 84ch (3 細胞型 信号分解)");
+    println!("  M1:   84 入力 → 40 出力 (grid 20×26)");
     println!("  音素: pa, ki, tu, se, mo");
     println!("  ★ 時間圧縮速度: {}x (音素長 {:.0}ms、 STDP 窓 80ms)", speed, 200.0 / speed);
 
-    let mut cfg = ThermoNetworkConfig::for_m1_cn();
+    let mut cfg = ThermoNetworkConfig::for_m1_cn_40();
     if decay_slow > 1 {
         cfg.conductance_decay_interval *= decay_slow;
         cfg.vitality_decay_interval *= decay_slow;

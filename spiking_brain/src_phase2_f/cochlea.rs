@@ -279,7 +279,7 @@ impl FireGenerator {
 ///     [BandpassBiquad × 20] → [EnvelopeDetector × 20]
 ///   8 サンプル (1 step) ごと:
 ///     [圧縮 + 閾値発火] → input current[20] を生成
-pub const N_BANDS: usize = 20;
+pub const N_BANDS: usize = 40;  // 20→40: 解像度倍化 (ki/se 分化改善実験 Step 1 で確認済み)
 pub const SAMPLE_RATE_HZ: f64 = 16000.0;
 pub const SAMPLES_PER_STEP: usize = 8;  // DT_MS=0.5ms × 16kHz = 8
 pub const F_MIN_HZ: f64 = 50.0;
