@@ -1,0 +1,50 @@
+== M0 蝸牛 → M0.5 蝸牛神経核 → M1 パイプライン ==
+  M0:   40 帯域蝸牛 (旧 20→40 拡張、 ki/se 分化改善)
+  M0.5: Octopus 4 + Bushy 40 + Stellate 40 = 84ch (3 細胞型 信号分解)
+  M1:   84 入力 → 40 出力 (grid 20×26)
+  音素: pa, ki, tu, se, mo
+  ★ 時間圧縮速度: 3x (音素長 67ms、 STDP 窓 80ms)
+  ★ 減衰 30x 遅延: conductance 30000step, vitality 300000step
+
+  M1: neurons=520, synapses=22740 (in=84, out=40)
+
+== Phase 1: 訓練前評価 ==
+
+  -- PRE --
+    selectivity   : 0.263  (within 0.539 - between 0.276)
+    active outputs: 40 / 40
+    hit /syllable : pa:40/40  ki:19/40  tu:13/40  se:23/40  mo:13/40  
+
+== Phase 2: 訓練 5000 試行 ==
+  trial   500: sel=0.422 within=0.770 active=20/40 open=24227
+  trial  1000: sel=0.425 within=0.785 active=20/40 open=24235
+  trial  1500: sel=0.460 within=0.803 active=20/40 open=24243
+  trial  2000: sel=0.382 within=0.738 active=20/40 open=24250
+  trial  2500: sel=0.449 within=0.812 active=20/40 open=24253
+  trial  3000: sel=0.435 within=0.769 active=20/40 open=24256
+  trial  3500: sel=0.467 within=0.823 active=20/40 open=24262
+  trial  4000: sel=0.377 within=0.759 active=20/40 open=24264
+  trial  4500: sel=0.425 within=0.761 active=20/40 open=24266
+  trial  5000: sel=0.431 within=0.791 active=20/40 open=24266
+
+== Phase 3: 訓練後評価 ==
+
+  -- POST --
+    selectivity   : 0.477  (within 0.807 - between 0.330)
+    active outputs: 20 / 40
+    hit /syllable : pa:18/40  ki:18/40  tu:18/40  se:20/40  mo:18/40  
+
+  ── per-pair M1 出力 between (平均 fingerprint) ──
+    pa-ki: 0.852
+    pa-tu: 0.789
+    pa-se: 0.729
+    pa-mo: 0.768
+    ki-tu: 0.948
+    ki-se: 0.824
+    ki-mo: 0.675
+    tu-se: 0.808
+    tu-mo: 0.679
+    se-mo: 0.714
+    平均 = 0.779  (M0→M1 直結 baseline は 0.956〜1.0)
+
+  軸索成長 1531 刈り取り 0 open 24271/24271
