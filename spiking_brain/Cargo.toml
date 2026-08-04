@@ -112,6 +112,11 @@ path = "src_phase2_f/bin/m0_m1_m2_pipeline_v2.rs"
 name = "cochlea_differentiation"
 path = "src_phase2_f/bin/cochlea_differentiation.rs"
 
+# Phase 2 Fork F: M1 出力の時間構造 probe (M1.5 皮質中継 設計の土台)
+[[bin]]
+name = "m1_output_probe"
+path = "src_phase2_f/bin/m1_output_probe.rs"
+
 # Phase 2 Fork F: Octopus 細胞 音素別オンセット応答診断 (M0.5 前段検証)
 [[bin]]
 name = "octopus_probe"
