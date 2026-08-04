@@ -180,6 +180,10 @@ fn main() {
     let n_train: usize = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(2000);
     let speed: f64 = std::env::args().nth(3).and_then(|s| s.parse().ok()).unwrap_or(3.0);
     let decay_slow: i32 = std::env::args().nth(4).and_then(|s| s.parse().ok()).unwrap_or(30);
+    // 診断用: M2 causal_window 上書き (0=for_m2 既定 320 のまま)
+    let m2_cw: i32 = std::env::args().nth(5).and_then(|s| s.parse().ok()).unwrap_or(0);
+    // 診断用: M2 抑制ニューロン割合% 上書き (0=既定)。winner-take-all の抑制依存を切り分け
+    let m2_inh_pct: i32 = std::env::args().nth(6).and_then(|s| s.parse().ok()).unwrap_or(0);
     let n_sample = 20;
     let snap = if n_train >= 500 { 500 } else { (n_train / 10).max(10) };
 
@@ -195,6 +199,15 @@ fn main() {
     let mut cfg2 = ThermoNetworkConfig::for_m2();
     cfg2.conductance_decay_interval *= decay_slow;
     cfg2.vitality_decay_interval *= decay_slow;
+    if m2_cw > 0 { cfg2.causal_window = m2_cw; }
+    if m2_inh_pct > 0 {
+        // 内部 380 (= exc(内部) + inh) を保ちつつ抑制割合を変える
+        let internal = 380usize;
+        let new_inh = internal * m2_inh_pct as usize / 100;
+        cfg2.n_inhibitory = new_inh;
+        cfg2.n_excitatory = (internal - new_inh) + cfg2.n_output;  // 内部興奮 + 出力
+    }
+    println!("  M2 診断: causal_window={} inhibitory={}", cfg2.causal_window, cfg2.n_inhibitory);
     let mut m2 = ThermoNetwork::new(cfg2);
     let n_det = m2.input_neurons.len();  // M1.5 検出器数 = M2 入力数 (40)
 
