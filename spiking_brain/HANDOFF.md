@@ -13,9 +13,32 @@
 - roster を clean stack から relay-interleaved へ改訂 (CONTEXT.md §3 同期済)
 - M0.5 ラベル衝突を解消 (M0.5 = 蝸牛神経核、両耳統合 SOC は別スロット)
 
----
+## M1.5 皮質中継 調査の結論 (2026-08-04、`M1_5_CORTICAL_RELAY_DESIGN.md`、8 実験)
 
-## 直近の状態 (2026-05-31、 4 ラン実施)
+M1.5 を設計・実装・検証した結果、**M1→M2 の壁はリレー核 (入力前処理) では越えられない**
+ことが判明。これはアーキ検証の「リレー核が全境界を救う」仮説への重要な**反証**。
+
+判明した事実:
+- `m1_output_probe`: M1 出力は **150ms の疎な単発判断バースト** (全音素同時、~20 spikes)。
+  timing は音素非依存 (cosine 0.954)、identity だけが音素を運ぶ。
+- 入力再符号化 5 機構 (素通し/案A 遅延/案B 同時性/coinc_spread/coinc_sustain) → **全て M2 5/20 collapse**。
+  案A は可逆で無効、案B は分化を少し創る (per-pair 0.410→0.385) が M2 collapse は解けず。
+- M2 診断 (causal_window 320/160/80 × 抑制 10/18/30%) → **全構成 5/20 collapse**、原因でない。
+- **根本原因**: M2 の構造的可塑性 (vitality) が、M1 の単発バースト (時間変化しない疎入力) 下で
+  必ず 5 出力へ刈り込む。M0.5 は M1 に 300ms 全体の時間変化リッチ入力を与えたが、M1 は
+  M2 へ単発バーストしか出せない。
+
+**⚠️ 次の 4 方向は全て稼働モジュールへの重大変更 → ユーザー合意が必須 (未着手)**:
+- (a) M1 が時間展開した出力を出すよう発火動態を見直す (per-pair 最適 decay_slow=30 と衝突可能性)
+- (b) M2 の vitality を疎入力でも多経路保持するよう根本見直し
+- (c) trial バースト paradigm を連続ストリーム積分へ見直し
+- (d) M1.5/M2 を保留し、確立した M0.5+M1 (per-pair 0.765) を論文へ結実
+
+実装済み資産 (次セッションで再利用可): `cortical_relay.rs` (CorticalRelay 遅延 /
+CoincidenceRelay 同時性+持続)、`m1_output_probe`/`relay_probe`/`m0_cn_m1_relay_m2_pipeline`
+(mode: none/coinc/coinc_spread/coinc_sustain、M2 cw/抑制 上書き引数付き)。
+
+---
 
 ## 直近の状態 (2026-05-31、 4 ラン実施)
 
@@ -67,19 +90,20 @@ selectivity = within − between という単純差は **between 改善を罰す
 - 入力 1 音素の校正修正が網全体を再編する (散逸構造平衡点の入力統計依存性)
 - ki-tu (両 Plosive) の本質的類似の壁を 0.96 → 0.88 で初突破、 完全分離は M1.5/M2 課題
 
-## 次のタスク (優先度順、2026-08-04 アーキ検証後)
+## 次のタスク (優先度順、2026-08-04 M1.5 調査後)
 
-1. **M1.5 皮質中継の設計** [最優先] — ki-tu 分離と M2 collapse の共通解。
-   蝸牛神経核 (Octopus/Bushy/Stellate) を M1 の 40ch スパース出力に適用する形。
-   M1 出力は既にスパース (18-20/40) なので入力統計が蝸牛と異なる点に注意。
-2. **M2 の真の長時定数化** — causal_window だけでなく delay_range/decay も音節スケールへ。
-   M1.5 なしで collapse がどこまで解消するか切り分け。
-3. **指標体系の整理** — §5.4 系で sel vs per-pair を再整理 (per-pair を主指標に格上げ)
-4. **解像度 60/80 帯域** の収益逓減ライン
-5. **DRAM 参照ランプ ADC を DramNetwork に統合** — graded spike 実現
-6. **note 記事化** — 「蝸牛 解像度倍化 + mo 修正 + 指標の限界」 (5 本目)
+0. **【要ユーザー判断】M1→M2 の壁への方針決定** — 上記「M1.5 調査の結論」の 4 方向 (a/b/c/d)
+   から選ぶ。a〜c は稼働モジュール (M1/M2) への重大変更で合意必須。d は安全 (論文結実)。
+   M1.5 は「入力再符号化では M2 collapse を解けない」ことが 8 実験で確定済み。
+1. **(d 候補) M0.5+M1 成果の論文結実** — per-pair 0.765、リレー核原理 (M0.5 実証)、
+   M1.5 の負の結果 (階層境界ごとに必要な処置は一様でない) を PAPER に。負の結果も価値。
+2. **指標体系の整理** — §5.4 系で sel vs per-pair を再整理 (per-pair を主指標に格上げ)
+3. **解像度 60/80 帯域** の収益逓減ライン
+4. **DRAM 参照ランプ ADC を DramNetwork に統合** — graded spike 実現
+5. **note 記事化** — 「蝸牛 解像度倍化 + mo 修正 + 指標の限界」 (5 本目)
 
-詳細は ARCHITECTURE_REVIEW_2026-08-04.md および DAILY_SUMMARY_2026-05-31.md 参照。
+詳細は M1_5_CORTICAL_RELAY_DESIGN.md、ARCHITECTURE_REVIEW_2026-08-04.md、
+DAILY_SUMMARY_2026-05-31.md 参照。
 
 ---
 
