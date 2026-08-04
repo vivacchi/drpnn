@@ -27,7 +27,7 @@ const FP_BIN: f64 = 10.0;
 const INPUT_CURRENT_M2: i32 = 60;
 
 #[derive(Clone, Copy, PartialEq)]
-enum Mode { None, Coinc, CoincSpread }
+enum Mode { None, Coinc, CoincSpread, CoincSustain }
 
 /// 1 trial: M0 → CN → M1 → (M1.5) → M2。M1.5 出力ラスタも返す。
 fn present(
@@ -78,6 +78,7 @@ fn present(
                 let coinc = relay.as_mut().unwrap().process_step(&m1_vec);
                 spread.as_mut().unwrap().process_step(&coinc)
             }
+            Mode::CoincSustain => relay.as_mut().unwrap().process_step(&m1_vec),
         };
         for (ch, &v) in m15_vec.iter().enumerate() {
             if v > 0 { m15_log.push((ch, tr)); }
@@ -173,6 +174,7 @@ fn main() {
     let mode = match mode_s.as_str() {
         "none" => Mode::None,
         "coinc_spread" => Mode::CoincSpread,
+        "coinc_sustain" => Mode::CoincSustain,
         _ => Mode::Coinc,
     };
     let n_train: usize = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(2000);
@@ -199,6 +201,8 @@ fn main() {
     let mut relay = match mode {
         Mode::None => None,
         Mode::Coinc | Mode::CoincSpread => Some(CoincidenceRelay::new(n_m1_out, n_det, 0x1F5)),
+        // 持続 300 step (150ms): 150ms のバースト検出を trial 末 (300ms) まで持続 drive 化
+        Mode::CoincSustain => Some(CoincidenceRelay::with_sustain(n_m1_out, n_det, 0x1F5, 300)),
     };
     // CoincSpread: 検出器出力を per-detector 遅延で時間展開 (H2' 検証)
     let mut spread = match mode {

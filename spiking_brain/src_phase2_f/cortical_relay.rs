@@ -58,12 +58,24 @@ pub struct CoincidenceRelay {
     subsets: Vec<Vec<usize>>,
     /// 検出器ニューロン (ThermoNeuron、同時性しきい値)
     detectors: Vec<ThermoNeuron>,
+    /// 持続 (reverberation) step 数。0 なら onset のみ。>0 なら発火後この step 数だけ持続発火。
+    sustain_steps: i32,
+    /// 各検出器の持続残り step (ラッチ)
+    sustain_left: Vec<i32>,
     current_time: i32,
 }
 
 impl CoincidenceRelay {
     /// n_in 入力チャネル、n_det 検出器。部分集合は seed で決定論的に割り当て。
+    /// sustain_steps=0 で onset のみ (従来案 B)。
     pub fn new(n_in: usize, n_det: usize, seed: u16) -> Self {
+        Self::with_sustain(n_in, n_det, seed, 0)
+    }
+
+    /// sustain_steps > 0: 検出器が一度発火したらその識別チャネルを sustain_steps step 持続
+    /// 発火させる (reverberation ラッチ)。M0.5 Stellate の「持続 rate」に相当し、
+    /// M1 の単発バーストを trial 後半まで続く持続 drive へ変換する。
+    pub fn with_sustain(n_in: usize, n_det: usize, seed: u16, sustain_steps: i32) -> Self {
         let mut lfsr = Lfsr::new(seed);
         let subsets: Vec<Vec<usize>> = (0..n_det).map(|_| {
             let mut s = Vec::with_capacity(COINC_SUBSET_K);
@@ -74,7 +86,13 @@ impl CoincidenceRelay {
             s
         }).collect();
         let detectors: Vec<ThermoNeuron> = (0..n_det).map(|_| make_detector()).collect();
-        Self { subsets, detectors, current_time: 0 }
+        Self {
+            subsets,
+            detectors,
+            sustain_steps,
+            sustain_left: vec![0; n_det],
+            current_time: 0,
+        }
     }
 
     /// 1 step 処理。m1_out: M1 出力発火電流ベクトル。戻り値: 検出器発火ベクトル。
@@ -87,7 +105,16 @@ impl CoincidenceRelay {
             for &ch in &self.subsets[d] {
                 if ch < m1_out.len() && m1_out[ch] > 0 { inp += FIRE_CURRENT; }
             }
-            if det.update(inp, t) { out[d] = FIRE_CURRENT; }
+            let fired = det.update(inp, t);
+            if fired && self.sustain_steps > 0 {
+                self.sustain_left[d] = self.sustain_steps;  // ラッチ (再発火で延長)
+            }
+            if fired {
+                out[d] = FIRE_CURRENT;
+            } else if self.sustain_left[d] > 0 {
+                out[d] = FIRE_CURRENT;                       // 持続発火
+                self.sustain_left[d] -= 1;
+            }
         }
         self.current_time += 1;
         out
@@ -95,6 +122,7 @@ impl CoincidenceRelay {
 
     pub fn reset(&mut self) {
         for d in &mut self.detectors { d.reset_state(); }
+        for s in &mut self.sustain_left { *s = 0; }
     }
 
     pub fn subsets(&self) -> &[Vec<usize>] { &self.subsets }
