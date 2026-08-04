@@ -15,7 +15,7 @@
 use spiking_brain::phase2_f::thermo_network::{ThermoNetwork, ThermoNetworkConfig};
 use spiking_brain::phase2_f::cochlea::{Cochlea, SAMPLES_PER_STEP};
 use spiking_brain::phase2_f::cochlear_nucleus::CochlearNucleus;
-use spiking_brain::phase2_f::cortical_relay::CoincidenceRelay;
+use spiking_brain::phase2_f::cortical_relay::{CoincidenceRelay, CorticalRelay};
 use spiking_brain::phase2_f::phoneme_synth::{standard_syllables, synth_syllable_scaled, LfsrNoise, Syllable};
 use spiking_brain::trace::{cosine_similarity, OutputTrace};
 use rand::prelude::*;
@@ -27,13 +27,13 @@ const FP_BIN: f64 = 10.0;
 const INPUT_CURRENT_M2: i32 = 60;
 
 #[derive(Clone, Copy, PartialEq)]
-enum Mode { None, Coinc }
+enum Mode { None, Coinc, CoincSpread }
 
 /// 1 trial: M0 → CN → M1 → (M1.5) → M2。M1.5 出力ラスタも返す。
 fn present(
     m1: &mut ThermoNetwork, m2: &mut ThermoNetwork,
     cochlea: &mut Cochlea, cn: &mut CochlearNucleus,
-    relay: &mut Option<CoincidenceRelay>, mode: Mode,
+    relay: &mut Option<CoincidenceRelay>, spread: &mut Option<CorticalRelay>, mode: Mode,
     waveform: &[i32],
 ) -> (Vec<(usize, f64)>, Vec<(usize, f64)>, Vec<(usize, f64)>) {
     m1.reset_trial_state();
@@ -41,6 +41,7 @@ fn present(
     cochlea.reset();
     cn.reset();
     if let Some(r) = relay { r.reset(); }
+    if let Some(s) = spread { s.reset(); }
     let t0 = m1.current_time;
     let n_m2_in = m2.input_neurons.len();
     let n_m1_out = m1.output_neurons.len();
@@ -73,6 +74,10 @@ fn present(
         let m15_vec: Vec<i32> = match mode {
             Mode::None => m1_vec.clone(),
             Mode::Coinc => relay.as_mut().unwrap().process_step(&m1_vec),
+            Mode::CoincSpread => {
+                let coinc = relay.as_mut().unwrap().process_step(&m1_vec);
+                spread.as_mut().unwrap().process_step(&coinc)
+            }
         };
         for (ch, &v) in m15_vec.iter().enumerate() {
             if v > 0 { m15_log.push((ch, tr)); }
@@ -136,7 +141,7 @@ fn perpair(per: &[Vec<Vec<f64>>]) -> f64 {
 
 fn evaluate(
     m1: &mut ThermoNetwork, m2: &mut ThermoNetwork, cochlea: &mut Cochlea, cn: &mut CochlearNucleus,
-    relay: &mut Option<CoincidenceRelay>, mode: Mode,
+    relay: &mut Option<CoincidenceRelay>, spread: &mut Option<CorticalRelay>, mode: Mode,
     syllables: &[Syllable], waveforms: &[Vec<i32>], n_sample: usize, n_det: usize, label: &str,
 ) {
     let n1 = m1.output_neurons.len();
@@ -147,7 +152,7 @@ fn evaluate(
     let mut a2 = vec![false; n2];
     for _ in 0..n_sample {
         for si in 0..syllables.len() {
-            let (l1, l15, l2) = present(m1, m2, cochlea, cn, relay, mode, &waveforms[si]);
+            let (l1, l15, l2) = present(m1, m2, cochlea, cn, relay, spread, mode, &waveforms[si]);
             for &(oi, _) in &l2 { a2[oi] = true; }
             f1[si].push(fingerprint(&l1, n1));
             f15[si].push(fingerprint(&l15, n_det));
@@ -165,7 +170,11 @@ fn evaluate(
 
 fn main() {
     let mode_s = std::env::args().nth(1).unwrap_or_else(|| "coinc".into());
-    let mode = if mode_s == "none" { Mode::None } else { Mode::Coinc };
+    let mode = match mode_s.as_str() {
+        "none" => Mode::None,
+        "coinc_spread" => Mode::CoincSpread,
+        _ => Mode::Coinc,
+    };
     let n_train: usize = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(2000);
     let speed: f64 = std::env::args().nth(3).and_then(|s| s.parse().ok()).unwrap_or(3.0);
     let decay_slow: i32 = std::env::args().nth(4).and_then(|s| s.parse().ok()).unwrap_or(30);
@@ -189,7 +198,12 @@ fn main() {
 
     let mut relay = match mode {
         Mode::None => None,
-        Mode::Coinc => Some(CoincidenceRelay::new(n_m1_out, n_det, 0x1F5)),
+        Mode::Coinc | Mode::CoincSpread => Some(CoincidenceRelay::new(n_m1_out, n_det, 0x1F5)),
+    };
+    // CoincSpread: 検出器出力を per-detector 遅延で時間展開 (H2' 検証)
+    let mut spread = match mode {
+        Mode::CoincSpread => Some(CorticalRelay::new(n_det, 0x2C7)),
+        _ => None,
     };
 
     let mut cochlea = Cochlea::new();
@@ -210,13 +224,13 @@ fn main() {
         m1.input_neurons.len(), n_m1_out, n_det, m2.input_neurons.len(), m2.output_neurons.len());
 
     println!("\n== 訓練前 ==");
-    evaluate(&mut m1, &mut m2, &mut cochlea, &mut cn, &mut relay, mode, &syllables, &waveforms, n_sample, n_det, "PRE");
+    evaluate(&mut m1, &mut m2, &mut cochlea, &mut cn, &mut relay, &mut spread, mode, &syllables, &waveforms, n_sample, n_det, "PRE");
 
     println!("\n== 訓練 {n_train} 試行 ==");
     let mut rng = StdRng::seed_from_u64(42);
     for trial in 1..=n_train {
         let si = rng.gen_range(0..syllables.len());
-        let _ = present(&mut m1, &mut m2, &mut cochlea, &mut cn, &mut relay, mode, &waveforms[si]);
+        let _ = present(&mut m1, &mut m2, &mut cochlea, &mut cn, &mut relay, &mut spread, mode, &waveforms[si]);
         if trial % snap == 0 || trial == n_train {
             println!("  trial {:>5}: M1 open={} | M2 open={} within(参考)",
                 trial, m1.n_open_synapses(), m2.n_open_synapses());
@@ -224,6 +238,6 @@ fn main() {
     }
 
     println!("\n== 訓練後 ==");
-    evaluate(&mut m1, &mut m2, &mut cochlea, &mut cn, &mut relay, mode, &syllables, &waveforms, n_sample, n_det, "POST");
+    evaluate(&mut m1, &mut m2, &mut cochlea, &mut cn, &mut relay, &mut spread, mode, &syllables, &waveforms, n_sample, n_det, "POST");
     println!("\n  M1 成長{} 刈{} | M2 成長{} 刈{}", m1.axons_grown, m1.axons_pruned, m2.axons_grown, m2.axons_pruned);
 }
