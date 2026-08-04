@@ -25,5 +25,6 @@ pub mod axon_growth;
 pub mod thermo_network;
 pub mod cochlea;
 pub mod cochlear_nucleus;
+pub mod cortical_relay;
 pub mod phoneme_synth;
 pub mod sha256;
