@@ -1,6 +1,21 @@
 # HANDOFF.md — 現状と次のタスク
 
-最終更新: 2026-05-31 (蝸牛 解像度倍化 + mo fix + decay 30、 per-pair 0.765 で過去最高分化)
+最終更新: 2026-08-04 (全体アーキ検証: リレー核原理を確立、roster を relay-interleaved 化)
+
+## アーキ検証の結論 (2026-08-04、`ARCHITECTURE_REVIEW_2026-08-04.md`)
+
+各セクションの役割・期待機能を意図/実装/実証で突き合わせた。中心的発見:
+**階層 SNN は全境界にリレー核 (時間構造処理段) を要する。**
+- M0→M1 は M0.5 蝸牛神経核で解決済 (✅ 最大の成功)
+- M1→M2 は M1.5 皮質中継が未挿入 → M2 collapse (⬜ 最優先)
+- M2 の「長時定数」は名目のみ (causal_window だけ、delay/decay は M1 と同一)
+- ki-tu 分離と M2 collapse は同一原因 (M1.5 欠落) に帰着
+- roster を clean stack から relay-interleaved へ改訂 (CONTEXT.md §3 同期済)
+- M0.5 ラベル衝突を解消 (M0.5 = 蝸牛神経核、両耳統合 SOC は別スロット)
+
+---
+
+## 直近の状態 (2026-05-31、 4 ラン実施)
 
 ## 直近の状態 (2026-05-31、 4 ラン実施)
 
@@ -37,11 +52,12 @@ selectivity = within − between という単純差は **between 改善を罰す
 - コード識別子 (ThermoNetwork, ThermoNeuron 等): **そのまま**
 - 一般英単語 (cochlea, fingerprint 等): **カタカナ or 漢字** (蝸牛、 フィンガープリント)
 
-### 主要モジュールの状態
-- **M0 蝸牛** (src_phase2_f/cochlea.rs): **40 帯域** (旧 20→40 拡張)、 mo 修正済
-- **M0.5 蝸牛神経核** (src_phase2_f/cochlear_nucleus.rs): 自動拡張 → **84ch** (4+40+40)
-- **M1 A1** (ThermoNetwork): `for_m1_cn_40` (84入力) で per-pair 0.765 (R4)
-- **M2 A2**: for_m2 (40→20) 実装済だが collapse (M1.5 課題と同根)
+### 主要モジュールの状態 (relay-interleaved roster)
+- **M0 蝸牛** (src_phase2_f/cochlea.rs): ✅ **40 帯域** (旧 20→40 拡張)、 mo 修正済
+- **M0.5 蝸牛神経核** [リレー核 #1] (src_phase2_f/cochlear_nucleus.rs): ✅ **84ch** (4+40+40)
+- **M1 A1** (ThermoNetwork): ✅⚠️ `for_m1_cn_40` (84入力) で per-pair 0.765 (R4)、 識別性は ki-tu で頭打ち
+- **M1.5 皮質中継** [リレー核 #2]: ⬜ **未実装 (最優先)** — M1 出力に蝸牛神経核相当を適用
+- **M2 A2**: ⚠️ for_m2 (40→20) 実装済だが collapse (M1.5 欠落 + 時定数が名目のみ)
 - **Phase 2 DRAM** (src_phase2_dram/): 物理モデル + 参照ランプ ADC 検証済 (§9-a 突破の道筋)
 - **Phase 3 3D** (src_phase3_3d/): 11 実験完了、 打ち切り (PAPER §5.13)
 
@@ -51,15 +67,19 @@ selectivity = within − between という単純差は **between 改善を罰す
 - 入力 1 音素の校正修正が網全体を再編する (散逸構造平衡点の入力統計依存性)
 - ki-tu (両 Plosive) の本質的類似の壁を 0.96 → 0.88 で初突破、 完全分離は M1.5/M2 課題
 
-## 次のタスク (優先度順)
+## 次のタスク (優先度順、2026-08-04 アーキ検証後)
 
-1. **指標体系の整理** — §5.4 系で sel vs per-pair を再整理 (補遺)
-2. **ki-tu 完全分離** の上位処理 — M1.5 (皮質中継 時相変換) 設計
-3. **解像度 60/80 帯域** の収益逓減ライン
-4. **DRAM 参照ランプ ADC を DramNetwork に統合** — graded spike 実現
-5. **note 記事化** — 「蝸牛 解像度倍化 + mo 修正 + 指標の限界」 (5 本目)
+1. **M1.5 皮質中継の設計** [最優先] — ki-tu 分離と M2 collapse の共通解。
+   蝸牛神経核 (Octopus/Bushy/Stellate) を M1 の 40ch スパース出力に適用する形。
+   M1 出力は既にスパース (18-20/40) なので入力統計が蝸牛と異なる点に注意。
+2. **M2 の真の長時定数化** — causal_window だけでなく delay_range/decay も音節スケールへ。
+   M1.5 なしで collapse がどこまで解消するか切り分け。
+3. **指標体系の整理** — §5.4 系で sel vs per-pair を再整理 (per-pair を主指標に格上げ)
+4. **解像度 60/80 帯域** の収益逓減ライン
+5. **DRAM 参照ランプ ADC を DramNetwork に統合** — graded spike 実現
+6. **note 記事化** — 「蝸牛 解像度倍化 + mo 修正 + 指標の限界」 (5 本目)
 
-詳細は DAILY_SUMMARY_2026-05-31.md 参照。
+詳細は ARCHITECTURE_REVIEW_2026-08-04.md および DAILY_SUMMARY_2026-05-31.md 参照。
 
 ---
 

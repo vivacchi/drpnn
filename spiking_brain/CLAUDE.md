@@ -17,24 +17,28 @@
 
 ## 必ず読むべきドキュメント (順番に)
 
-1. **DESIGN_PHILOSOPHY.md** — プロジェクト哲学の中核 (特に §11 熱力学的描像)
-2. **CONTEXT.md** — 設計の全体像
-3. **HANDOFF.md** — 現状と次のタスク
-4. **PHASE2_INSTRUCTION.md** — Phase 2 (熱力学版) 実装の詳細指示
+1. **spiking_brain/ARCHITECTURE_REVIEW_2026-08-04.md** — 全体アーキ検証 (最新、各セクションの役割/期待機能/判定)
+2. **DESIGN_PHILOSOPHY.md** — プロジェクト哲学の中核 (特に §11 熱力学的描像)
+3. **CONTEXT.md** — 設計の全体像 (§3 が relay-interleaved roster)
+4. **HANDOFF.md** — 現状と次のタスク
+5. **PHASE2_INSTRUCTION.md** — Phase 2 (熱力学版) 実装の詳細指示
 
 ---
 
 ## 現在のフェーズ
 
-**Phase 2: 熱力学版 SNN の構築 (新規)**
+**Phase 2 (熱力学版) 稼働中 — 聴覚経路の relay-interleaved 構築**
 
-Phase 1 (物理置換型) は実装済みで、慣化機構導入で部分的成功。これを基盤に Phase 2 を 0 から構築する。
+Phase 2 fork F (統合再設計) が本流。M0 蝸牛 → M0.5 蝸牛神経核 → M1 A1 の感覚
+フロントエンドが稼働 (per-pair 0.765)。次は M1.5 皮質中継 (リレー核 #2) の設計。
 
-ユーザーの決定:
-- 熱力学的描像を正式採用
-- Phase 1 と並行比較 (上書きしない)
-- 概念実装 (整数値で熱力学量を表現)
-- 軸索成長は隣接 PE の比較で実装
+最新の全体像は `spiking_brain/ARCHITECTURE_REVIEW_2026-08-04.md` を最初に読むこと。
+
+確立した設計判断:
+- 熱力学的描像を正式採用 (散逸構造としての学習)
+- **リレー核原理**: 全階層境界に時間構造処理段を挟む (M0.5 実証済、M1.5 が次)
+- 評価は per-pair between を主指標に (selectivity 単独は between 改善を罰する)
+- 軸索成長は隣接 PE の熱勾配比較で実装
 
 ---
 
