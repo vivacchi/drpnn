@@ -122,6 +122,11 @@ path = "src_phase2_f/bin/m1_output_probe.rs"
 name = "relay_probe"
 path = "src_phase2_f/bin/relay_probe.rs"
 
+# Phase 2 Fork F: M0→CN→M1→M1.5→M2 5 段 (M1.5 で M2 collapse 解消を検証)
+[[bin]]
+name = "m0_cn_m1_relay_m2_pipeline"
+path = "src_phase2_f/bin/m0_cn_m1_relay_m2_pipeline.rs"
+
 # Phase 2 Fork F: Octopus 細胞 音素別オンセット応答診断 (M0.5 前段検証)
 [[bin]]
 name = "octopus_probe"

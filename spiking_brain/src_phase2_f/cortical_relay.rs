@@ -19,10 +19,103 @@
 //! 整数演算: 遅延は整数 step。
 
 use super::cochlea::FIRE_CURRENT;
+use super::thermo_neuron::ThermoNeuron;
 
 /// 遅延の最小・最大 (step、dt=0.5ms なので 2→1ms, 60→30ms)
 pub const RELAY_DELAY_MIN: i32 = 2;
 pub const RELAY_DELAY_MAX: i32 = 60;
+
+// ── 案 B: 同時性検出器バンク (M1 出力版 Octopus) ──
+/// 各検出器が聴く M1 出力チャネル数 (ランダム部分集合サイズ)
+pub const COINC_SUBSET_K: usize = 3;
+/// 発火に必要な同時活性チャネル数 (≥ この数が窓内に来たら発火)
+pub const COINC_THRESHOLD: i32 = 2;
+
+/// 決定論的 LFSR (16bit Galois、taps 0xB400)。初期化時のみ使用 (原理 3)。
+struct Lfsr(u16);
+impl Lfsr {
+    fn new(seed: u16) -> Self { Lfsr(if seed == 0 { 0xACE1 } else { seed }) }
+    fn next(&mut self) -> u16 {
+        let lsb = self.0 & 1;
+        self.0 >>= 1;
+        if lsb != 0 { self.0 ^= 0xB400; }
+        self.0
+    }
+    fn below(&mut self, n: usize) -> usize { (self.next() as usize) % n.max(1) }
+}
+
+/// M1.5 案 B: ランダム部分集合 同時性検出器バンク。
+///
+/// M1 出力の同期発火集合 S に対し、各検出器 d は自分のランダム部分集合 R_d のうち
+/// COINC_THRESHOLD 個以上が窓内に co-active になったとき発火する (非線形しきい値)。
+/// 異なる音素は異なる S を持つため、発火する検出器の集合が変わる = 派生特徴で分化。
+///
+/// 案 A (可逆な遅延) と違い、しきい値同時性は非可逆で新しい分離を創れる。
+/// 物理性: 同時性検出のみ (判断機構なし)、決定論 (部分集合は初期化時 LFSR で固定)、整数。
+#[derive(Clone)]
+pub struct CoincidenceRelay {
+    /// 各検出器が聴く M1 出力チャネルの部分集合
+    subsets: Vec<Vec<usize>>,
+    /// 検出器ニューロン (ThermoNeuron、同時性しきい値)
+    detectors: Vec<ThermoNeuron>,
+    current_time: i32,
+}
+
+impl CoincidenceRelay {
+    /// n_in 入力チャネル、n_det 検出器。部分集合は seed で決定論的に割り当て。
+    pub fn new(n_in: usize, n_det: usize, seed: u16) -> Self {
+        let mut lfsr = Lfsr::new(seed);
+        let subsets: Vec<Vec<usize>> = (0..n_det).map(|_| {
+            let mut s = Vec::with_capacity(COINC_SUBSET_K);
+            while s.len() < COINC_SUBSET_K.min(n_in) {
+                let ch = lfsr.below(n_in);
+                if !s.contains(&ch) { s.push(ch); }
+            }
+            s
+        }).collect();
+        let detectors: Vec<ThermoNeuron> = (0..n_det).map(|_| make_detector()).collect();
+        Self { subsets, detectors, current_time: 0 }
+    }
+
+    /// 1 step 処理。m1_out: M1 出力発火電流ベクトル。戻り値: 検出器発火ベクトル。
+    pub fn process_step(&mut self, m1_out: &[i32]) -> Vec<i32> {
+        let t = self.current_time;
+        let mut out = vec![0i32; self.detectors.len()];
+        for (d, det) in self.detectors.iter_mut().enumerate() {
+            // 部分集合の入力電流を合算 (同時性: 同じ step または窓内で積分)
+            let mut inp = 0i32;
+            for &ch in &self.subsets[d] {
+                if ch < m1_out.len() && m1_out[ch] > 0 { inp += FIRE_CURRENT; }
+            }
+            if det.update(inp, t) { out[d] = FIRE_CURRENT; }
+        }
+        self.current_time += 1;
+        out
+    }
+
+    pub fn reset(&mut self) {
+        for d in &mut self.detectors { d.reset_state(); }
+    }
+
+    pub fn subsets(&self) -> &[Vec<usize>] { &self.subsets }
+}
+
+/// 同時性検出器用 ThermoNeuron。
+/// 閾値 = COINC_THRESHOLD × FIRE_CURRENT (部分集合の THRESHOLD 個が窓内で発火)。
+/// 低 leak で ~10ms 窓の積分、強 entropy 適応で持続再発火を抑制 (Octopus 同型)。
+fn make_detector() -> ThermoNeuron {
+    let mut n = ThermoNeuron::excitatory((0, 0));
+    n.threshold_base = COINC_THRESHOLD * FIRE_CURRENT;
+    n.leak = 3;                    // 60 が ~20 step(10ms)で散逸 → 同時性窓 ~10ms
+    n.enthalpy_max = 10;
+    n.enthalpy_recovery_rate = 10;
+    n.entropy_per_spike = 80;      // 一度発火したら閾値上昇 → 単発オンセットのみ
+    n.entropy_decay_rate = 1;
+    n.entropy_decay_interval = 5;
+    n.spontaneous_input = 0;
+    n.generates_entropy = true;
+    n
+}
 
 /// M1.5 皮質中継 (遅延多様 1:1 リレー)
 #[derive(Clone)]
