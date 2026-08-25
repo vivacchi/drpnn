@@ -142,6 +142,11 @@ path = "src_phase2_f/bin/consonant_probe.rs"
 name = "perturbation_probe"
 path = "src_phase2_f/bin/perturbation_probe.rs"
 
+# Phase 2 Fork F: M0 のゲートにレベル軸を入れる
+[[bin]]
+name = "level_axis"
+path = "src_phase2_f/bin/level_axis.rs"
+
 # Phase 2 Fork F: M0 の設計点を詰める (帯域数まで含めた掃引)
 [[bin]]
 name = "m0_design"
