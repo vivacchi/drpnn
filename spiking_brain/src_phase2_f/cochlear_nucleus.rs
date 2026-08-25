@@ -178,6 +178,73 @@ impl Default for CochlearNucleus {
 
 #[cfg(test)]
 mod tests {
+
+    /// **累積失聴が起きないこと** (2026-08-25・G48 の回帰テスト)。
+    ///
+    /// 旧実装 (一定レートの線形散逸) では、同じ音節を 120 回提示すると
+    /// M0.5 の応答が **15%** まで落ちた (適応ではなく累積失聴)。
+    /// 比例散逸にして 86% で有界になった。
+    /// 正解の出どころ = **同じ刺激を繰り返し与えたのは実験者**。
+    #[test]
+    fn no_cumulative_deafness() {
+        use super::super::cochlea::{Cochlea, SAMPLES_PER_STEP};
+        use super::super::phoneme_synth::{standard_syllables, synth_syllable_scaled, LfsrNoise};
+        let syl = standard_syllables()[0];
+        let mut noise = LfsrNoise::new(0xACE1);
+        let wave = synth_syllable_scaled(&syl, &mut noise, 1.0);
+        let mut co = Cochlea::new();
+        let mut cn = super::CochlearNucleus::new();
+        let mut first = 0u32;
+        let mut last = 0u32;
+        for i in 0..60 {
+            co.reset();
+            cn.reset();
+            let mut total = 0u32;
+            for chunk in wave.chunks(SAMPLES_PER_STEP) {
+                if chunk.len() < SAMPLES_PER_STEP {
+                    break;
+                }
+                let out = co.process_step(chunk);
+                total += cn.process_step(&out).iter().filter(|&&v| v != 0).count() as u32;
+            }
+            if i == 0 {
+                first = total;
+            }
+            last = total;
+        }
+        let keep = last as f64 / first.max(1) as f64;
+        assert!(keep >= 0.70,
+            "60 回提示で M0.5 の応答が {:.1}% まで落ちた (累積失聴)", keep * 100.0);
+    }
+
+    /// **適応は生きていること** (G49 の回帰テスト)。
+    /// 「有界にする」を「適応を消す」で通していないかの検査。
+    #[test]
+    fn adaptation_still_works_within_stimulus() {
+        use super::super::cochlea::{Cochlea, SAMPLES_PER_STEP};
+        use super::super::phoneme_synth::{synth_vowel, vowels};
+        let wave = synth_vowel(&vowels()[0], 500.0);
+        let mut co = Cochlea::new();
+        let mut cn = super::CochlearNucleus::new();
+        let half = wave.len() / 2;
+        let (mut a, mut b) = (0u32, 0u32);
+        let mut pos = 0usize;
+        for chunk in wave.chunks(SAMPLES_PER_STEP) {
+            if chunk.len() < SAMPLES_PER_STEP {
+                break;
+            }
+            let out = co.process_step(chunk);
+            let n = cn.process_step(&out).iter().filter(|&&v| v != 0).count() as u32;
+            if pos < half { a += n } else { b += n }
+            pos += SAMPLES_PER_STEP;
+        }
+        let ratio = b as f64 / a.max(1) as f64;
+        assert!(ratio < 0.95,
+            "持続音で順応していない (後半/前半 = {:.2}) = 適応が消えている", ratio);
+        assert!(ratio > 0.5,
+            "順応が強すぎる (後半/前半 = {:.2})", ratio);
+    }
+
     use super::*;
 
     #[test]

@@ -80,7 +80,48 @@ fn nearest_band(freqs: &[f64], f_hz: f64) -> usize {
         .0
 }
 
+/// G52: フォルマント**強度の順位**が蝸牛出力に残っているか。
+///
+/// 監査の指摘:「フォルマント振幅比 (1.0 : 0.7 : 0.3) が完全に消える。
+/// 母音表の ×4 はこの副作用の対症療法だった」。
+/// これは 2026-08-25 に入れた ×4 への直接の批判なので確かめる。
+///
+/// 正解の出どころ = **振幅比を決めたのは実験者**。
+/// F1 > F2 > F3 と置いたのだから、出力の順位もそうなるべき。
+fn formant_rank(spike_cost: i32) {
+    let vs = vowels();
+    let names = ["a", "i", "u", "e", "o"];
+    let freqs = Cochlea::new().center_freqs.clone();
+    println!();
+    println!("--- G52 フォルマント強度の順位は残るか ---");
+    println!("音素  指定振幅 (F1,F2,F3)      発火数 (F1,F2,F3)   順位一致");
+    let mut ok = 0usize;
+    for (k, v) in vs.iter().enumerate() {
+        let counts = band_spikes(&synth_vowel(v, VOWEL_MS), 4096, 4096);
+        let obs: Vec<u32> = (0..3)
+            .map(|f| counts[nearest_band(&freqs, v.formants_hz[f])])
+            .collect();
+        // 指定振幅の順位と観測発火数の順位が一致するか (同順位は不一致扱い)
+        let spec = v.amplitudes;
+        let rank_ok = spec[0] > spec[1] && spec[1] > spec[2]
+            && obs[0] > obs[1] && obs[1] > obs[2];
+        if rank_ok {
+            ok += 1;
+        }
+        println!(
+            "{:>4}  ({:>5},{:>5},{:>5})   ({:>5},{:>5},{:>5})   {}",
+            names[k], spec[0], spec[1], spec[2], obs[0], obs[1], obs[2],
+            if rank_ok { "○" } else { "×" }
+        );
+        let _ = spike_cost;
+    }
+    println!("G52: {}/5 の母音で F1>F2>F3 の順位が保たれた {}",
+             ok, if ok == 5 { "PASS" } else { "**FAIL**" });
+    println!("  (指定振幅は F1>F2>F3 と置いてある。出力もそうなるべき)");
+}
+
 fn main() {
+    formant_rank(spike_cost_arg());
     let vs = vowels();
     let names = ["a", "i", "u", "e", "o"];
     let freqs = Cochlea::new().center_freqs.clone();

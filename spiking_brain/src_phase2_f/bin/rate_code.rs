@@ -42,7 +42,7 @@ use spiking_brain::phase2_f::phoneme_synth::{
 const STEPS_PER_SEC: f64 = 2000.0;
 const PROBE_MS: f64 = 170.0;
 const VOWEL_MS: f64 = 170.0;
-const SPIKE_COSTS: [i32; 6] = [0, 30, 60, 120, 240, 480];
+const SPIKE_COSTS: [i32; 4] = [0, 240, 480, 960];
 /// rate-level を測る中心周波数 [Hz]
 const RL_FC: f64 = 1000.0;
 const LEVELS_DB: [f64; 9] = [0.0, -3.0, -6.0, -9.0, -12.0, -15.0, -18.0, -21.0, -24.0];

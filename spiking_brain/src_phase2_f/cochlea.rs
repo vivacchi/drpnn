@@ -415,10 +415,27 @@ pub const FIRE_CURRENT: i32 = 60;
 /// 不応期 (step 単位). 連続音でも発火が頭打ちになる.
 pub const FIRE_REFRACTORY_STEPS: i32 = 4;
 
-/// 1 発火あたりの消費量 (**0 = 旧モード**: 閾値+固定不応期)。
-/// `FireGenerator::spike_cost` を参照。既定はまず 0 (従来とバイト同一) にしておき、
-/// 掃引で決めてから変える。
-pub const FIRE_SPIKE_COST: i32 = 0;
+/// 1 発火あたりの消費量 (0 = 旧モード: 閾値+固定不応期)。
+///
+/// **既定 480**（2026-08-25・掃引で決定）。`FireGenerator::spike_cost` を参照。
+///
+/// **なぜ要るか（本当の理由）**: 母音テーブルの絶対スケールを ×4 にして
+/// F2/F3 を発火床の上に押し上げた結果、**F1 が飽和域に入り、
+/// フォルマント強度の順位が完全に消えた**。実測（旧モード）:
+/// 指定振幅 (16000, 11200, 4800) に対し発火数 (66, 66, 65) — ほぼ完全にフラット。
+/// 3.3:1 の強度差が出力に 1 も残っていなかった。
+/// 発火が状態を消費すれば飽和しなくなり、順位が戻る。実測（spike_cost=480）:
+/// (172, 78, 28) で **5/5 の母音で F1>F2>F3 が保たれる**。
+/// **×4 と rate code は対**で、どちらか片方だけでは正しくない。
+///
+/// **採用規則（実測前に宣言）**: G52（フォルマント強度の順位 5/5）かつ
+/// G45（無音床）かつ G46（0dB の場所符号）を満たすうち、G43（動的レンジ）が最大。
+///   240 → G52 PASS・動的レンジ 24.00 dB
+///   **480 → G52 PASS・動的レンジ 26.50 dB** ← 採用
+///   960 → G52 PASS・動的レンジ 26.00 dB
+///
+/// **これはレベル不変性（G40-G42）を直さない。** それは AGC の課題として別に残る。
+pub const FIRE_SPIKE_COST: i32 = 480;
 /// 包絡線検出器の leak_shift (4 = 約 1ms 時定数)
 pub const ENV_LEAK_SHIFT: i32 = 4;
 
@@ -663,6 +680,57 @@ mod tests {
         assert!(seeds.len() > N_BANDS / 2, "ノイズ源の種が重複しすぎている: {}", seeds.len());
     }
 
+    /// **フォルマント強度の順位が蝸牛出力に残ること** (G52 の回帰テスト・2026-08-25)。
+    ///
+    /// 母音テーブルは F1 > F2 > F3 の振幅で指定してある。出力もその順であるべき。
+    /// 正解の出どころ = **振幅比を決めたのは実験者**。
+    ///
+    /// 旧モード (spike_cost=0) では全部が飽和して (66, 66, 65) とフラットになり、
+    /// 5 母音すべてで順位が失われていた。
+    #[test]
+    fn formant_intensity_rank_survives() {
+        use super::super::phoneme_synth::{synth_vowel, vowels};
+        let c0 = Cochlea::new();
+        for v in vowels().iter() {
+            let mut c = Cochlea::new();
+            let wave = synth_vowel(v, 170.0);
+            let mut counts = vec![0u32; N_BANDS];
+            for chunk in wave.chunks(SAMPLES_PER_STEP) {
+                if chunk.len() < SAMPLES_PER_STEP {
+                    break;
+                }
+                let out = c.process_step(chunk);
+                for i in 0..N_BANDS {
+                    if out[i] != 0 {
+                        counts[i] += 1;
+                    }
+                }
+            }
+            let obs: Vec<u32> = (0..3)
+                .map(|f| {
+                    let bi = c0
+                        .center_freqs
+                        .iter()
+                        .enumerate()
+                        .min_by(|a, b| {
+                            (a.1 - v.formants_hz[f])
+                                .abs()
+                                .partial_cmp(&(b.1 - v.formants_hz[f]).abs())
+                                .unwrap()
+                        })
+                        .unwrap()
+                        .0;
+                    counts[bi]
+                })
+                .collect();
+            assert!(
+                obs[0] > obs[1] && obs[1] > obs[2],
+                "母音 {} で強度の順位が失われた: 指定 {:?} → 観測 {:?}",
+                v.label, v.amplitudes, obs
+            );
+        }
+    }
+
     /// 低域の弱い純音が聞こえること (2026-08-25 に直した欠陥の回帰テスト)。
     ///
     /// 状態を高精度化する前は、最弱フォルマント振幅 3200 の純音が
@@ -867,19 +935,64 @@ mod tests {
 
     #[test]
     fn fire_generator_respects_threshold() {
+        // --- 旧モード (spike_cost = 0): 閾値 + 固定不応期 ---
+        // 2026-08-25 に既定が漏れ積分発火に変わったので、旧契約は明示的に指定して検査する。
         let mut fg = FireGenerator::new(100, 4);
-        // 閾値未満
+        fg.spike_cost = 0;
         assert!(!fg.process(50));
         assert!(!fg.process(99));
-        // 閾値以上で発火
-        assert!(fg.process(100));
-        // 不応期中は発火しない
+        assert!(fg.process(100)); // 閾値以上で発火
+        assert!(!fg.process(1000)); // 不応期中
         assert!(!fg.process(1000));
         assert!(!fg.process(1000));
         assert!(!fg.process(1000));
-        assert!(!fg.process(1000));
-        // 不応期明けで再発火可能
-        assert!(fg.process(1000));
+        assert!(fg.process(1000)); // 不応期明け
+    }
+
+    /// 既定 (漏れ積分発火) の契約 (2026-08-25)。
+    ///
+    /// - **閾値未満は 1 発も出ない** (無音床の保存)
+    /// - 閾値を超えた分が溜まり、`spike_cost` に達すると発火して**消費**する
+    /// - よって発火率が (入力 − 閾値) / `spike_cost` に比例する
+    #[test]
+    fn fire_generator_integrates_and_consumes() {
+        let mut fg = FireGenerator::new(100, 4);
+        assert_eq!(fg.spike_cost, FIRE_SPIKE_COST, "既定が漏れ積分発火でない");
+
+        // 閾値未満はいくら続けても発火しない (床の保存)
+        for _ in 0..1000 {
+            assert!(!fg.process(99), "閾値未満で発火した = 無音床が壊れている");
+        }
+
+        // 閾値ちょうども溜まらないので発火しない
+        for _ in 0..1000 {
+            assert!(!fg.process(100));
+        }
+
+        // 閾値を超えると、超過分の蓄積に応じて発火する
+        let mut fg2 = FireGenerator::new(100, 4);
+        let strong: i32 = 100 + FIRE_SPIKE_COST / 4; // 超過 = spike_cost/4 → 4 step に 1 回
+        let mut spikes = 0;
+        for _ in 0..400 {
+            if fg2.process(strong) {
+                spikes += 1;
+            }
+        }
+        assert!(spikes >= 80 && spikes <= 120,
+            "超過 spike_cost/4 なら 400step で約 100 発のはず: {}", spikes);
+
+        // 入力が大きいほど発火率が高い (レベル依存 = rate code)
+        let mut fg3 = FireGenerator::new(100, 4);
+        let stronger: i32 = 100 + FIRE_SPIKE_COST / 2;
+        let mut spikes3 = 0;
+        for _ in 0..400 {
+            if fg3.process(stronger) {
+                spikes3 += 1;
+            }
+        }
+        assert!(spikes3 > spikes,
+            "入力を上げても発火率が上がらない = rate code になっていない ({} vs {})",
+            spikes3, spikes);
     }
 
     // ─── Step 3 テスト ───

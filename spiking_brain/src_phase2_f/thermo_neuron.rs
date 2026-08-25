@@ -372,6 +372,65 @@ impl ThermoNeuron {
 
 #[cfg(test)]
 mod tests {
+    // ── エントロピー散逸: 比例形 (2026-08-25・ユーザー判断で既定 ON) ──
+
+    /// **使われなければ 0 まで冷める** (ユーザーの定式化・2026-08-25)。
+    ///
+    /// 比例散逸だけだと整数演算で `entropy < 2^shift` のとき減算が 0 になり、
+    /// **残留が永久に残る**。一定レートを下限に置いてあるので 0 に到達する。
+    #[test]
+    fn entropy_cools_to_zero_when_unused() {
+        let mut n = super::ThermoNeuron::excitatory((0, 0));
+        n.local_entropy = 10_000;
+        // 入力なしで十分長く回す
+        for t in 0..200_000 {
+            n.update(0, t);
+        }
+        assert_eq!(n.local_entropy, 0,
+            "使われないのにエントロピーが残っている: {}", n.local_entropy);
+    }
+
+    /// **発火し続けるものは中間の平衡点に至る** (ユーザーの定式化)。
+    ///
+    /// 強い入力を与え続けたとき、エントロピーが**発散せず有界**であること。
+    /// 旧実装 (一定レートの線形散逸) では際限なく溜まった。
+    #[test]
+    fn entropy_reaches_bounded_equilibrium_when_driven() {
+        let mut n = super::ThermoNeuron::excitatory((0, 0));
+        let mut samples = Vec::new();
+        for t in 0..60_000 {
+            n.update(50, t); // 強い入力を与え続ける
+            if t % 10_000 == 9_999 {
+                samples.push(n.local_entropy);
+            }
+        }
+        // 後半 3 点が互いに近い = 平衡している (単調増加なら発散)
+        let tail = &samples[samples.len() - 3..];
+        let mx = *tail.iter().max().unwrap();
+        let mn = *tail.iter().min().unwrap();
+        assert!(mx > 0, "駆動しているのにエントロピーが 0 = 適応が死んでいる");
+        assert!((mx - mn) * 10 <= mx,
+            "エントロピーが平衡していない (発散の疑い): {:?}", samples);
+    }
+
+    /// 散逸は比例項と一定レートの**大きい方**であること (形の固定)。
+    #[test]
+    fn entropy_dissipation_is_max_of_proportional_and_rate() {
+        let mut n = super::ThermoNeuron::excitatory((0, 0));
+        n.entropy_decay_interval = 1; // 毎 step 散逸させて観測しやすくする
+        // 高エントロピー: 比例項が支配
+        n.local_entropy = 8192;
+        let before = n.local_entropy;
+        n.update(0, 0);
+        let drop_high = before - n.local_entropy;
+        assert_eq!(drop_high, 8192 >> n.entropy_decay_shift,
+            "高エントロピー側で比例項が支配していない");
+        // 低エントロピー: 一定レートが支配
+        n.local_entropy = 1;
+        n.update(0, 1);
+        assert_eq!(n.local_entropy, 0, "低エントロピー側で 0 に到達しない");
+    }
+
     // ── 背景活動ノイズ (2026-08-25) ──
 
     /// 既定は無効で、有効時と挙動が違うこと (バイト同一性 + 経路が生きていること)。
