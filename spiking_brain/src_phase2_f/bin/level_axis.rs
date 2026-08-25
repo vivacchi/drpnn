@@ -35,8 +35,16 @@ const VOWEL_MS: f64 = 170.0;
 /// 提示レベル [dB] (0 = 母音テーブルのまま)
 const LEVELS_DB: [f64; 9] = [0.0, -3.0, -6.0, -9.0, -12.0, -15.0, -18.0, -21.0, -24.0];
 
+fn spike_cost_arg() -> i32 {
+    std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(0)
+}
+
 fn band_spikes(wave: &[i32], gain_num: i32, gain_den: i32) -> [u32; N_BANDS] {
     let mut c = Cochlea::new();
+    let sc = spike_cost_arg();
+    if sc > 0 {
+        for f in c.fire_gens.iter_mut() { f.spike_cost = sc; }
+    }
     let mut counts = [0u32; N_BANDS];
     for chunk in wave.chunks(SAMPLES_PER_STEP) {
         if chunk.len() < SAMPLES_PER_STEP {
@@ -79,7 +87,7 @@ fn main() {
 
     println!("=== M0 のゲートにレベル軸を入れる ===");
     println!("N_BANDS={} ・ 提示レベル {:?} dB", N_BANDS, LEVELS_DB);
-    println!("(0 dB = 母音テーブルのまま = 既存ゲートが測っていた唯一の点)");
+    println!("(0 dB = 母音テーブルのまま) ・ spike_cost = {} (0=旧モード)", spike_cost_arg());
     println!();
 
     // レベルごとのプロファイル

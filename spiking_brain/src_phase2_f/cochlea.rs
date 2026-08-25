@@ -281,22 +281,58 @@ pub fn compress_sqrt(env: i32) -> i32 {
 /// パルス幅 (連続発火継続 step 数) と不応期を持つ.
 #[derive(Clone, Debug)]
 pub struct FireGenerator {
-    /// 発火させる包絡線下限 (これ未満は発火しない)
+    /// 発火させる包絡線下限 (これ未満は発火しない)。
+    /// 漏れ積分モードでは**1 step あたりの漏れ**として働き、無音床を決める。
     pub threshold: i32,
-    /// 不応期残り step (>0 なら発火しない)
+    /// 不応期残り step (>0 なら発火しない)。旧モードのみ。
     pub refractory_remaining: i32,
-    /// 不応期長 step
+    /// 不応期長 step。旧モードのみ。
     pub refractory_period: i32,
+    /// 漏れ積分の蓄積 (2026-08-25 追加)
+    pub accumulator: i32,
+    /// 1 発火あたりの消費量 (**0 = 旧モード**)。
+    ///
+    /// 旧モードは「閾値を超えていたら 1/(1+不応期) step ごとに発火」で、
+    /// **発火が env にも膜電位にも戻らない**。そのため 1ch の rate-level 関数は
+    /// 閾値を跨いだ瞬間に上限 400Hz へ飛び、閾値→飽和は fc により 0.50-3.25 dB しかない
+    /// (実測)。中間レートが出る振幅は掃引の 0.6-3.6%。
+    /// 設計書 §1.4 が宣言する「動的レンジ 30-130 dB SPL」に対し出力段は実質 2 状態だった。
+    ///
+    /// > 0 にすると**漏れ積分発火**になる:
+    /// ```text
+    /// accumulator += compressed_env - threshold   (負なら 0 で床)
+    /// if accumulator >= spike_cost { accumulator -= spike_cost; 発火 }
+    /// ```
+    /// **発火が状態を消費する**ので、発火率が (包絡線 - 床) / spike_cost に比例する。
+    /// これは `ThermoNeuron` が既に持っている物理 (溜める・漏れる・閾値で消費) と同じ形で、
+    /// 判断機構ではない。無音床は `threshold` がそのまま保存する。
+    pub spike_cost: i32,
 }
 
 impl FireGenerator {
     pub fn new(threshold: i32, refractory_period: i32) -> Self {
-        Self { threshold, refractory_remaining: 0, refractory_period }
+        Self {
+            threshold,
+            refractory_remaining: 0,
+            refractory_period,
+            accumulator: 0,
+            spike_cost: FIRE_SPIKE_COST,
+        }
     }
 
     /// 1 step 処理. 戻り値: 発火したか.
     #[inline]
     pub fn process(&mut self, compressed_env: i32) -> bool {
+        if self.spike_cost > 0 {
+            // 漏れ積分発火: 発火が状態を消費するので発火率がレベルに比例する
+            self.accumulator = (self.accumulator + compressed_env - self.threshold).max(0);
+            if self.accumulator >= self.spike_cost {
+                self.accumulator -= self.spike_cost;
+                return true;
+            }
+            return false;
+        }
+        // 旧モード: 閾値 + 固定不応期 (発火が状態に戻らない)
         if self.refractory_remaining > 0 {
             self.refractory_remaining -= 1;
             return false;
@@ -309,7 +345,10 @@ impl FireGenerator {
         }
     }
 
-    pub fn reset(&mut self) { self.refractory_remaining = 0; }
+    pub fn reset(&mut self) {
+        self.refractory_remaining = 0;
+        self.accumulator = 0;
+    }
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -375,6 +414,11 @@ pub const Q_SHARPENING: f64 = 6.0;
 pub const FIRE_CURRENT: i32 = 60;
 /// 不応期 (step 単位). 連続音でも発火が頭打ちになる.
 pub const FIRE_REFRACTORY_STEPS: i32 = 4;
+
+/// 1 発火あたりの消費量 (**0 = 旧モード**: 閾値+固定不応期)。
+/// `FireGenerator::spike_cost` を参照。既定はまず 0 (従来とバイト同一) にしておき、
+/// 掃引で決めてから変える。
+pub const FIRE_SPIKE_COST: i32 = 0;
 /// 包絡線検出器の leak_shift (4 = 約 1ms 時定数)
 pub const ENV_LEAK_SHIFT: i32 = 4;
 
