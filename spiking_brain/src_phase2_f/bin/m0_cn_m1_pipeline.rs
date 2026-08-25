@@ -197,9 +197,9 @@ fn main() {
     let snap_interval = if n_train >= 500 { 500 } else { (n_train / 10).max(10) };
 
     println!("== M0 蝸牛 → M0.5 蝸牛神経核 → M1 パイプライン ==");
-    println!("  M0:   40 帯域蝸牛 (旧 20→40 拡張、 ki/se 分化改善)");
-    println!("  M0.5: Octopus 4 + Bushy 40 + Stellate 40 = 84ch (3 細胞型 信号分解)");
-    println!("  M1:   84 入力 → 40 出力 (grid 20×26)");
+    println!("  M0:   {} 帯域蝸牛 (Q×{:.0} 選択性・閾値{})", spiking_brain::phase2_f::cochlea::N_BANDS, spiking_brain::phase2_f::cochlea::Q_SHARPENING, spiking_brain::phase2_f::cochlea::FIRE_THRESHOLD);
+    println!("  M0.5: Octopus 4 + Bushy {n} + Stellate {n} = {}ch (3 細胞型 信号分解)", spiking_brain::phase2_f::cochlear_nucleus::N_CN_OUTPUT, n = spiking_brain::phase2_f::cochlea::N_BANDS);
+    println!("  M1:   {} 入力 → 40 出力", spiking_brain::phase2_f::cochlear_nucleus::N_CN_OUTPUT);
     println!("  音素: pa, ki, tu, se, mo");
     println!("  ★ 時間圧縮速度: {}x (音素長 {:.0}ms、 STDP 窓 80ms)", speed, 200.0 / speed);
     println!("  ★ 提示ゲイン: {}x / 子音合成: {} / biquad: {}", input_gain,
@@ -213,7 +213,12 @@ fn main() {
         format!("一律 {}", input_spont)
     });
 
-    let mut cfg = ThermoNetworkConfig::for_m1_cn_40();
+    // N_BANDS に応じて config を選ぶ (合わないと step が入力を無言で捨てる)
+    let mut cfg = if spiking_brain::phase2_f::cochlear_nucleus::N_CN_OUTPUT == 164 {
+        ThermoNetworkConfig::for_m1_cn_80()
+    } else {
+        ThermoNetworkConfig::for_m1_cn_40()
+    };
     if decay_slow > 1 {
         cfg.conductance_decay_interval *= decay_slow;
         cfg.vitality_decay_interval *= decay_slow;

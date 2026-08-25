@@ -147,6 +147,51 @@ impl ThermoNetworkConfig {
         }
     }
 
+    /// M1 + 蝸牛神経核 80ch 版: input 164 (octopus 4 + bushy 80 + stellate 80) + output 40
+    /// grid 20×34 = 680
+    ///   input 164: y=0..7 (160) + y=8 先頭 4 (4)
+    ///   output 40: y=32,33 (2 行)
+    ///   内部 516: 抑制 93 (18%)、 興奮 423 (= 内部興奮 383 + 出力 40)
+    ///
+    /// 2026-08-25 に `N_BANDS` を 40 → 80 にしたことに伴う新設。
+    /// `for_m1_cn_40` (n_input=84) のままだと `ThermoNetwork::step` が
+    /// `if k < self.input_neurons.len()` で**80 チャネルを無言で捨てる**
+    /// (独立監査が `default()` について指摘したのと同じ経路)。
+    pub fn for_m1_cn_80() -> Self {
+        let grid_w = 20;
+        let grid_h = 34;
+        let mut input_positions = Vec::with_capacity(164);
+        for y in 0..8 {
+            for x in 0..grid_w { input_positions.push((x, y)); }
+        }
+        for x in 0..4 { input_positions.push((x, 8)); }
+        assert_eq!(input_positions.len(), 164);
+        let mut output_positions = Vec::with_capacity(40);
+        for y in (grid_h - 2)..grid_h {
+            for x in 0..grid_w { output_positions.push((x, y)); }
+        }
+        assert_eq!(output_positions.len(), 40);
+        Self {
+            grid_width: grid_w,
+            grid_height: grid_h,
+            n_input: 164,
+            n_output: 40,
+            n_excitatory: 423,
+            n_inhibitory: 93,
+            input_fanout: 80,
+            delay_range: (2, 40),
+            seed: 303,  // for_m1_cn (300), for_m2 (301), for_m1_cn_40 (302) と異なる
+            axon_growth_interval: GROWTH_INTERVAL,
+            dt_ms: 0.5,
+            enable_up_down: false,
+            io_layout: Some(IoLayout { input_positions, output_positions }),
+            causal_window: 160,
+            threshold_diversity_std: 0,
+            conductance_decay_interval: 1000,
+            vitality_decay_interval: 10000,
+        }
+    }
+
     /// M1 + 蝸牛神経核 40ch 拡張版: input 84 (octopus 4 + bushy 40 + stellate 40) + output 40
     /// grid 20×26 = 520
     ///   input 84: y=0..3 (80) + y=4 先頭 4 (4)

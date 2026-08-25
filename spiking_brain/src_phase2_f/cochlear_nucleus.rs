@@ -23,8 +23,21 @@ pub const N_BUSHY: usize = N_BANDS;
 pub const N_STELLATE: usize = N_BANDS;
 /// 蝸牛神経核の総出力チャネル数
 pub const N_CN_OUTPUT: usize = N_OCTOPUS + N_BUSHY + N_STELLATE;  // 4 + N_BANDS + N_BANDS
-/// 各 Octopus の同時発火閾値 (帯域数): 3, 5, 8, 12 帯域同時で段階的に発火
-pub const OCTOPUS_COINCIDENCE_TH: [i32; N_OCTOPUS] = [3, 5, 8, 12];
+/// 各 Octopus の同時発火閾値 (帯域数)。
+///
+/// **帯域数に比例させる** (2026-08-25 修正)。旧実装は `[3, 5, 8, 12]` の
+/// **絶対本数**をハードコードしていたが、これは N_BANDS=40 のときに
+/// 「スペクトルの 7.5% / 12.5% / 20% / 30% が同時に鳴ったら発火」を意味していた。
+/// N_BANDS を変えると同じ音が鳴らす帯域数が変わるので、**閾値の意味が動く**
+/// (独立監査の指摘)。割合を保つよう N_BANDS から計算する。
+///   N_BANDS=40 → [3, 5, 8, 12]（従来と同一）
+///   N_BANDS=80 → [6, 10, 16, 24]
+pub const OCTOPUS_COINCIDENCE_TH: [i32; N_OCTOPUS] = [
+    (N_BANDS as i32 * 3) / 40,
+    (N_BANDS as i32 * 5) / 40,
+    (N_BANDS as i32 * 8) / 40,
+    (N_BANDS as i32 * 12) / 40,
+];
 
 /// Octopus 細胞用 ThermoNeuron を作る
 /// coincidence_th 帯域が同時発火 (= coincidence_th × FIRE_CURRENT の入力) で発火するよう調整
