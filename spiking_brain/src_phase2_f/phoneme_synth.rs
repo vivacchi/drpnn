@@ -188,6 +188,8 @@ pub enum Consonant {
     Fricative { freq_low: f64, freq_high: f64 },
     /// 鼻音 (例 /n/, /m/): 低周波フォルマント
     Nasal { f1: f64, f2: f64 },
+    /// 子音なし (「あいうえお」など母音のみのかな)
+    None,
 }
 
 /// 子音波形を生成. duration_ms: 持続時間.
@@ -250,6 +252,7 @@ pub fn synth_consonant(c: Consonant, duration_ms: f64, noise: &mut LfsrNoise) ->
                 out.push((s * env) >> 10);
             }
         }
+        Consonant::None => {}
     }
     out
 }
@@ -299,6 +302,122 @@ pub fn standard_syllables() -> [Syllable; 5] {
     ]
 }
 
+/// 帯域を効かせた子音波形 (2026-08-25 追加).
+///
+/// **既存の `synth_consonant` は変更しない**（None 腕の追加のみ）——
+/// 過去の測定ログ (sel 0.508 / per-pair 0.765 / ki-tu 0.883) との比較の連続性を保つため。
+///
+/// 動機: `standard_syllables()` は pa/ki/tu に別々の burst 周波数
+/// (500-2000 / 2000-4000 / 1500-3500 Hz) を指定しているが、`synth_consonant` は
+/// `Plosive { burst_freq_low: _, burst_freq_high: _ }` と**両方を捨てている**。
+/// 摩擦音も `Fricative { .. }` で全部無視。したがって pa/ki/tu は構造的に同一波形
+/// (LFSR 状態差のみ) であり、5 音素を分けていたのは母音 5 種と鼻音だけだった。
+/// かな 100 種を流しても 6 通りにしか写像されない。この関数は指定帯域を実際に効かせる。
+///
+/// 手段: `cochlea::BandpassBiquad`（整数 Q1.15・`process` は完全整数）に
+/// LFSR ノイズを通すだけ。f64 は初期化時のみ（原理 3 の明文化された例外）。
+///
+/// 振幅: 帯域通過で減衰するため正規化する。**揃えるのはピークではなく RMS**。
+///
+/// 初版はピーク 9000 に揃えたが、蝸牛は完全に無音になった (2026-08-25 実測:
+/// pa/tu/se とも総スパイク 0)。原因は基準の取り違え——蝸牛を駆動するのは
+/// 包絡線 ≒ RMS であり、ピークではない。実測 crest は母音 2.28 に対し
+/// 帯域ノイズ 4.07-4.53 なので、ピークを揃えると RMS が 1.8 倍不足する。
+///
+/// 目標値は**コードが既に宣言している定数から導く**: `cochlea::FIRE_THRESHOLD` 200 は
+/// 「純音 amp 8000 想定」で置かれている (cochlea.rs)。純音 amp 8000 の RMS は
+/// 8000/√2 ≈ 5657。これを目標にする。ゲートを通すために選んだ値ではない。
+///
+/// **全子音を同一 RMS に揃えるので、以後に測る分離は音量差でなくスペクトル差に帰する。**
+/// これは刺激生成側の校正であり、ネットワーク側の判断機構ではない。
+pub fn synth_consonant_banded(c: Consonant, duration_ms: f64, noise: &mut LfsrNoise) -> Vec<i32> {
+    /// 帯域通過後の目標 RMS = 純音 amp 8000 の RMS (= 8000/√2、cochlea の閾値設計値)
+    const TARGET_RMS: i32 = 5657;
+
+    let n_samples = (duration_ms * SAMPLE_RATE_HZ / 1000.0) as usize;
+
+    match c {
+        Consonant::Plosive { burst_freq_low, burst_freq_high } => {
+            let mut bp = band_filter(burst_freq_low, burst_freq_high);
+            let mut out = Vec::with_capacity(n_samples);
+            let silent = ((10.0 * SAMPLE_RATE_HZ / 1000.0) as usize).min(n_samples / 2);
+            for _ in 0..silent {
+                out.push(0);
+            }
+            for i in silent..n_samples {
+                let decay = ((n_samples - i) * 1024 / (n_samples - silent).max(1)) as i32;
+                let n = bp.process(noise.next_sample());
+                out.push((n * decay) >> 10);
+            }
+            normalize_rms(out, TARGET_RMS)
+        }
+        Consonant::Fricative { freq_low, freq_high } => {
+            let mut bp = band_filter(freq_low, freq_high);
+            let mut out = Vec::with_capacity(n_samples);
+            let ramp = ((5.0 * SAMPLE_RATE_HZ / 1000.0) as usize).min(n_samples / 4).max(1);
+            for i in 0..n_samples {
+                let n = bp.process(noise.next_sample());
+                let env = if i < ramp {
+                    (i * 1024 / ramp) as i32
+                } else if i + ramp >= n_samples {
+                    (((n_samples - i) * 1024) / ramp) as i32
+                } else {
+                    1024
+                };
+                out.push((n * env) >> 10);
+            }
+            normalize_rms(out, TARGET_RMS)
+        }
+        // 鼻音は既に f1/f2 を使っているので既存実装をそのまま呼ぶ
+        Consonant::Nasal { .. } | Consonant::None => synth_consonant(c, duration_ms, noise),
+    }
+}
+
+/// 帯域 [lo, hi] → 中心は幾何平均、Q = 中心 / 帯域幅（音響の慣例）。
+fn band_filter(lo: f64, hi: f64) -> super::cochlea::BandpassBiquad {
+    let fc = (lo * hi).sqrt();
+    let bw = (hi - lo).max(1.0);
+    super::cochlea::BandpassBiquad::new(fc, fc / bw, SAMPLE_RATE_HZ)
+}
+
+/// RMS を target に合わせる（整数演算のみ・平方根は整数ニュートン法）。
+fn normalize_rms(mut wave: Vec<i32>, target: i32) -> Vec<i32> {
+    if wave.is_empty() {
+        return wave;
+    }
+    let sum_sq: i64 = wave.iter().map(|&v| (v as i64) * (v as i64)).sum();
+    let rms = isqrt_i64(sum_sq / wave.len() as i64);
+    if rms > 0 {
+        for v in wave.iter_mut() {
+            *v = ((*v as i64) * (target as i64) / rms) as i32;
+        }
+    }
+    wave
+}
+
+/// 整数平方根（ニュートン法・決定論的）。
+fn isqrt_i64(n: i64) -> i64 {
+    if n <= 0 {
+        return 0;
+    }
+    let mut x = n;
+    let mut y = (x + 1) / 2;
+    while y < x {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    x
+}
+
+/// `synth_syllable_scaled` の帯域版。子音だけ `synth_consonant_banded` に差し替える。
+pub fn synth_syllable_banded(syl: &Syllable, noise: &mut LfsrNoise, speed: f64) -> Vec<i32> {
+    let consonant_ms = 30.0 / speed;
+    let vowel_ms = 170.0 / speed;
+    let mut wave = synth_consonant_banded(syl.consonant, consonant_ms, noise);
+    wave.extend(synth_vowel(&syl.vowel, vowel_ms));
+    wave
+}
+
 /// 音節を合成. 子音 (30ms) + 母音 (170ms) = 200ms.
 /// 戻り値: 16kHz / i32 (i16 範囲) の波形.
 pub fn synth_syllable(syl: &Syllable, noise: &mut LfsrNoise) -> Vec<i32> {
@@ -327,6 +446,145 @@ pub fn synth_syllable_scaled(syl: &Syllable, noise: &mut LfsrNoise, speed: f64) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ──────────────────────────────────────────────────────────
+    // 帯域つき子音 (2026-08-25)
+    // ──────────────────────────────────────────────────────────
+
+    /// ゼロ交差数 = 支配周波数の代理指標（整数のみ）。
+    fn zero_crossings(wave: &[i32]) -> usize {
+        wave.windows(2)
+            .filter(|w| (w[0] < 0) != (w[1] < 0))
+            .count()
+    }
+
+    fn plosive(lo: f64, hi: f64) -> Consonant {
+        Consonant::Plosive { burst_freq_low: lo, burst_freq_high: hi }
+    }
+
+    /// 既存 `synth_consonant` の**欠陥を固定する**テスト。
+    /// 破裂音の帯域指定は無視されるので、別の周波数を与えても波形が同一になる。
+    /// これは仕様ではなくバグの記録——`synth_consonant_banded` が直す対象。
+    #[test]
+    fn legacy_consonant_ignores_burst_frequency() {
+        let a = synth_consonant(plosive(500.0, 2000.0), 30.0, &mut LfsrNoise::new(0xACE1));
+        let b = synth_consonant(plosive(2000.0, 4000.0), 30.0, &mut LfsrNoise::new(0xACE1));
+        assert_eq!(a, b, "既存実装は帯域を捨てている（この一致が壊れたら既存挙動が変わった）");
+    }
+
+    /// 帯域版は同じ LFSR 種でも帯域が違えば波形が違う。
+    #[test]
+    fn banded_consonant_uses_burst_frequency() {
+        let a = synth_consonant_banded(plosive(500.0, 2000.0), 30.0, &mut LfsrNoise::new(0xACE1));
+        let b = synth_consonant_banded(plosive(2000.0, 4000.0), 30.0, &mut LfsrNoise::new(0xACE1));
+        assert_ne!(a, b, "帯域を変えたのに波形が同一");
+        assert_eq!(a.len(), b.len());
+    }
+
+    /// 支配周波数が帯域の順に並ぶ: pa(fc≈1000) < tu(fc≈2291) < ki(fc≈2828) < se(fc≈4899).
+    /// 閾値は置かず**順序だけ**を見る（順序の正解は帯域指定＝実験者側にある）。
+    #[test]
+    fn banded_consonants_ordered_by_band() {
+        let pa = synth_consonant_banded(plosive(500.0, 2000.0), 100.0, &mut LfsrNoise::new(0xACE1));
+        let tu = synth_consonant_banded(plosive(1500.0, 3500.0), 100.0, &mut LfsrNoise::new(0xACE1));
+        let ki = synth_consonant_banded(plosive(2000.0, 4000.0), 100.0, &mut LfsrNoise::new(0xACE1));
+        let se = synth_consonant_banded(
+            Consonant::Fricative { freq_low: 3000.0, freq_high: 8000.0 },
+            100.0, &mut LfsrNoise::new(0xACE1));
+        let (z_pa, z_tu, z_ki, z_se) = (
+            zero_crossings(&pa), zero_crossings(&tu), zero_crossings(&ki), zero_crossings(&se));
+        assert!(z_pa < z_tu, "pa {} < tu {}", z_pa, z_tu);
+        assert!(z_tu < z_ki, "tu {} < ki {}", z_tu, z_ki);
+        assert!(z_ki < z_se, "ki {} < se {}", z_ki, z_se);
+    }
+
+    /// 実運用長 (30ms) でも 3 破裂音が区別できる。
+    #[test]
+    fn banded_consonants_differ_at_production_length() {
+        let waves: Vec<Vec<i32>> = [(500.0, 2000.0), (1500.0, 3500.0), (2000.0, 4000.0)]
+            .iter()
+            .map(|&(lo, hi)| synth_consonant_banded(plosive(lo, hi), 30.0,
+                                                    &mut LfsrNoise::new(0xACE1)))
+            .collect();
+        let z: Vec<usize> = waves.iter().map(|w| zero_crossings(w)).collect();
+        assert!(z[0] < z[1] && z[1] < z[2], "30ms でのゼロ交差 {:?} が帯域順でない", z);
+    }
+
+    fn wave_rms(w: &[i32]) -> f64 {
+        (w.iter().map(|&v| (v as f64) * (v as f64)).sum::<f64>() / w.len() as f64).sqrt()
+    }
+
+    /// 振幅校正: 全帯域子音の RMS が 5657 (= 純音 amp 8000 の RMS) に揃う。
+    /// **ピークでなく RMS** を揃える——蝸牛を駆動するのは包絡線であり、
+    /// ノイズの crest (実測 4.1-4.5) は母音 (2.28) と違うのでピークは比較不能。
+    /// 分離が音量差に化けないための校正でもある。
+    #[test]
+    fn banded_consonants_share_rms() {
+        let mut all = vec![
+            Consonant::Fricative { freq_low: 3000.0, freq_high: 8000.0 },
+        ];
+        for &(lo, hi) in &[(500.0, 2000.0), (1500.0, 3500.0), (2000.0, 4000.0)] {
+            all.push(plosive(lo, hi));
+        }
+        for c in all {
+            let w = synth_consonant_banded(c, 30.0, &mut LfsrNoise::new(0xACE1));
+            let r = wave_rms(&w);
+            // 破裂音は先頭 10ms が無音なので、その分だけ全体 RMS は目標を下回る。
+            // 整数化と無音区間を許容して ±15% で判定。
+            assert!((r - 5657.0).abs() / 5657.0 < 0.15,
+                    "{:?} の RMS {:.0} が目標 5657 から外れる", c, r);
+        }
+    }
+
+    #[test]
+    fn isqrt_matches_float() {
+        for n in [0i64, 1, 2, 3, 4, 99, 100, 12345, 1_000_000, 8_000_000_000] {
+            let want = (n as f64).sqrt() as i64;
+            let got = isqrt_i64(n);
+            assert!((got - want).abs() <= 1, "isqrt({}) = {} (期待 {})", n, got, want);
+        }
+    }
+
+    #[test]
+    fn banded_consonant_deterministic() {
+        let a = synth_consonant_banded(plosive(500.0, 2000.0), 30.0, &mut LfsrNoise::new(0xACE1));
+        let b = synth_consonant_banded(plosive(500.0, 2000.0), 30.0, &mut LfsrNoise::new(0xACE1));
+        assert_eq!(a, b);
+    }
+
+    /// 子音なし（母音のみのかな）は空の子音区間を返す。
+    #[test]
+    fn consonant_none_is_empty() {
+        assert!(synth_consonant(Consonant::None, 30.0, &mut LfsrNoise::new(0xACE1)).is_empty());
+        assert!(synth_consonant_banded(Consonant::None, 30.0, &mut LfsrNoise::new(0xACE1))
+            .is_empty());
+    }
+
+    /// 標準 5 音節が帯域版では全ペア相異なる（従来は pa/ki/tu が同一子音だった）。
+    #[test]
+    fn banded_standard_syllables_pairwise_distinct() {
+        let syls = standard_syllables();
+        let waves: Vec<Vec<i32>> = syls.iter()
+            .map(|s| synth_syllable_banded(s, &mut LfsrNoise::new(0xACE1), 1.0))
+            .collect();
+        for i in 0..waves.len() {
+            for j in (i + 1)..waves.len() {
+                assert_ne!(waves[i], waves[j], "{} と {} が同一波形",
+                           syls[i].label, syls[j].label);
+            }
+        }
+    }
+
+    /// 帯域版の音節も長さは従来版と同じ（下流のパイプラインを壊さない）。
+    #[test]
+    fn banded_syllable_same_length_as_scaled() {
+        for s in standard_syllables().iter() {
+            let a = synth_syllable_scaled(s, &mut LfsrNoise::new(0xACE1), 1.0);
+            let b = synth_syllable_banded(s, &mut LfsrNoise::new(0xACE1), 1.0);
+            assert_eq!(a.len(), b.len(), "{} の長さが違う", s.label);
+        }
+    }
+
 
     #[test]
     fn sin_table_initialized() {

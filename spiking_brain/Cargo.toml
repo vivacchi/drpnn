@@ -132,6 +132,11 @@ path = "src_phase2_f/bin/m0_cn_m1_m2_pipeline.rs"
 name = "m1_hash_probe"
 path = "src_phase2_f/bin/m1_hash_probe.rs"
 
+# Phase 2 Fork F: 子音は蝸牛から見て区別されているか (S1 検証)
+[[bin]]
+name = "consonant_probe"
+path = "src_phase2_f/bin/consonant_probe.rs"
+
 # Phase 3: M0 蝸牛 → M1 3D HCP 配置版 パイプライン (2D 版との直接比較用)
 [[bin]]
 name = "m0_m1_3d_pipeline"
