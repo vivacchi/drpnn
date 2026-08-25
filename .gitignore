@@ -22,3 +22,7 @@ venv/
 
 # Logs (keep result snapshots; drop transient run logs if too large)
 # *.log は残す方針 — 実験経緯の記録として有用
+
+# 言語ライン: コーパス実体 (git に載せない・数字と判定のみコミット)
+data/corpus/
+*.parquet
