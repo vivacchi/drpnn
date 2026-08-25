@@ -185,6 +185,14 @@ fn main() {
     // CLI 第 8 引数: 背景活動ノイズの振幅 (0 標準 = 従来と完全同一)。
     // spontaneous_input の定数駆動 (メトロノーム) に、時間方向の不規則さを足す。
     let jitter: i32 = std::env::args().nth(8).and_then(|s| s.parse().ok()).unwrap_or(0);
+    // CLI 第 11 引数: 入力ニューロンの自発入力 (-1 = 現状 idx%4 のまま・既定)
+    //   0 = 受信専用 (thermo_neuron.rs:196 のコメント / 設計 §3.6.1 の復旧案)
+    //   2 = 設計書 §3.6 の決定 (仮想 M0 等価性)
+    // 現状は「入力ニューロンは個体差なし」のガード
+    // (thermo_network.rs:438 `spontaneous_input == 0 && leak == 0`) が
+    // input() の実値 (2, 1) に対して常に偽で死んでおり、idx%4 が配られている。
+    // 実測: 無音でも 84 個中 43 個が最大 135Hz で自走し、M1 出力層が 1 秒 616 spike。
+    let input_spont: i32 = std::env::args().nth(11).and_then(|s| s.parse().ok()).unwrap_or(-1);
     let n_sample = 20;
     let snap_interval = if n_train >= 500 { 500 } else { (n_train / 10).max(10) };
 
@@ -199,6 +207,11 @@ fn main() {
         if legacy_biquad != 0 { "旧 算術シフト (24帯域が自己発振)" } else { "既定 ゼロ方向切り捨て (自己発振なし)" });
     println!("  ★ 背景活動ノイズ: 振幅 {} ({})", jitter,
         if jitter > 0 { "時間方向の不規則さあり" } else { "なし = 従来" });
+    println!("  ★ 入力層の自発入力: {}", if input_spont < 0 {
+        "現状 idx%4 (ガードが死んでいる・無音でも 43/84 が自走)".to_string()
+    } else {
+        format!("一律 {}", input_spont)
+    });
 
     let mut cfg = ThermoNetworkConfig::for_m1_cn_40();
     if decay_slow > 1 {
@@ -213,6 +226,9 @@ fn main() {
     let jitter_fraction: usize = std::env::args().nth(10).and_then(|s| s.parse().ok()).unwrap_or(1);
     if jitter > 0 {
         net.set_spontaneous_jitter_sparse(jitter, jitter_interval, jitter_fraction);
+    }
+    if input_spont >= 0 {
+        net.set_input_spontaneous(input_spont);
     }
     let mut cochlea = Cochlea::new();
     if legacy_biquad != 0 {

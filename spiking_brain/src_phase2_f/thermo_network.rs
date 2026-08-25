@@ -284,6 +284,23 @@ impl ThermoNetwork {
     /// JEPA でノイズが果たす役割 (崩壊の防止) と同じ位置にある。
     /// LFSR の種はネットワーク構築時に index 由来で配ってあるので、
     /// ニューロンごとに異なる列が出る (同期しない)。
+    /// 入力ニューロンの自発入力を一律に設定する (切り分け用・2026-08-25)。
+    ///
+    /// **背景**: `ThermoNetwork::new` のガード
+    /// `if n.spontaneous_input == 0 && n.leak == 0 { continue; }` は
+    /// 「入力ニューロンは個体差なし」を意図しているが、`ThermoNeuron::input()` の
+    /// 現在値は `spontaneous_input: 2, leak: 1` なので**条件に掛からず素通り**する。
+    /// 結果、入力ニューロンにも `idx % 4` が配られ、無音でも 84 個中 43 個が
+    /// 最大 135 Hz で自走している (実測)。完全無音 1 秒で M1 出力層が 616 spike。
+    ///
+    /// これは設計書 §3.6 の決定 (一律 2) でも §3.6.1 の復旧案 (一律 0) でもない
+    /// **第三の構成**であり、意図されていない。切り分けのため一律値を設定できるようにする。
+    pub fn set_input_spontaneous(&mut self, value: i32) {
+        for &i in self.input_neurons.iter() {
+            self.neurons[i].spontaneous_input = value;
+        }
+    }
+
     pub fn set_spontaneous_jitter(&mut self, amplitude: i32) {
         self.set_spontaneous_jitter_sparse(amplitude, 1, 1);
     }

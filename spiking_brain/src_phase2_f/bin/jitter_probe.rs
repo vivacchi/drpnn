@@ -93,7 +93,59 @@ fn accumulated_noise(amplitude: i32, steps: usize) -> f64 {
     sum_abs as f64 / n_trial as f64
 }
 
+/// 無音時に**入力ニューロン**が発火するか (除外ガードが生きているかの検査)。
+///
+/// thermo_network.rs のガードは `spontaneous_input == 0 && leak == 0` で
+/// 入力ニューロンを除外するつもりだが、`ThermoNeuron::input()` は
+/// `spontaneous_input: 2, leak: 1` なので**条件に掛からず素通りする**。
+/// 結果、入力ニューロンにも `idx % 4` の自発入力が配られている疑いがある。
+fn silent_input_layer() {
+    let mut net = ThermoNetwork::new(ThermoNetworkConfig::for_m1_cn_40());
+    let n_in = net.input_neurons.len();
+    let ids: std::collections::HashSet<usize> = net.input_neurons.iter().cloned().collect();
+    let spont: Vec<i32> = net.input_neurons.iter().map(|&i| net.neurons[i].spontaneous_input).collect();
+    let leak: Vec<i32> = net.input_neurons.iter().map(|&i| net.neurons[i].leak).collect();
+    let zero = vec![0i32; N_CN_OUT];
+    let mut counts = vec![0u32; n_in];
+    let idx_of: std::collections::HashMap<usize, usize> =
+        net.input_neurons.iter().enumerate().map(|(k, &i)| (i, k)).collect();
+    for _ in 0..SILENCE_STEPS {
+        for nid in net.step(&zero) {
+            if ids.contains(&nid) {
+                counts[idx_of[&nid]] += 1;
+            }
+        }
+    }
+    let active = counts.iter().filter(|&&c| c > 0).count();
+    let rates: Vec<f64> = counts.iter()
+        .map(|&c| c as f64 * STEPS_PER_SEC / SILENCE_STEPS as f64).collect();
+    let mx = rates.iter().cloned().fold(0.0f64, f64::max);
+    println!();
+    println!("--- 無音時の入力ニューロン (除外ガードの検査) ---");
+    println!("入力ニューロン数 {} / 無音で発火したもの {} 個", n_in, active);
+    println!("最大発火率 {:.1} Hz", mx);
+    println!("spontaneous_input の分布: {:?}", {
+        let mut h = std::collections::BTreeMap::new();
+        for v in spont.iter() { *h.entry(*v).or_insert(0) += 1; }
+        h
+    });
+    println!("leak の分布: {:?}", {
+        let mut h = std::collections::BTreeMap::new();
+        for v in leak.iter() { *h.entry(*v).or_insert(0) += 1; }
+        h
+    });
+    println!("ガード条件 (spontaneous_input==0 && leak==0) に掛かる入力ニューロン: {} 個",
+        (0..n_in).filter(|&k| spont[k] == 0 && leak[k] == 0).count());
+    if active > 0 {
+        println!("**ガードは死んでいる**: 無音でも入力層が発火している。");
+        println!("  設計上は「入力ニューロンは受信専用トランスデューサ」のはず。");
+    } else {
+        println!("ガードは生きている (無音で入力層は沈黙)。");
+    }
+}
+
 fn main() {
+    silent_input_layer();
     println!("=== 背景活動ノイズの診断 (M1: for_m1_cn_40・入力 {}ch) ===", N_CN_OUT);
     println!("N_BANDS={} ・ 無音 {:.0} 秒", N_BANDS, SILENCE_STEPS as f64 / STEPS_PER_SEC);
     println!();
