@@ -176,9 +176,10 @@ fn main() {
     // 従来の synth_consonant は Plosive/Fricative の帯域指定を捨てており
     // pa/ki/tu が構造的に同一波形だった (2026-08-25 発覚)。
     let banded: i32 = std::env::args().nth(5).and_then(|s| s.parse().ok()).unwrap_or(0);
-    // CLI 第 6 引数: 1 で蝸牛 biquad をゼロ方向切り捨てに (0 標準 = 従来と完全同一)
-    // 既定の acc>>15 は 40 帯域中 24 本で自己発振する (2026-08-25 実測)。
-    let magtrunc: i32 = std::env::args().nth(6).and_then(|s| s.parse().ok()).unwrap_or(0);
+    // CLI 第 6 引数: 1 で**旧**biquad (算術シフト = floor) に戻す。0 標準 = 現行既定。
+    // 2026-08-25 ユーザー判断 案ア により、蝸牛は既定でゼロ方向切り捨てになった。
+    // 旧既定は 40 帯域中 24 本で自己発振していた (この引数はその再現用ロールバック)。
+    let legacy_biquad: i32 = std::env::args().nth(6).and_then(|s| s.parse().ok()).unwrap_or(0);
     // CLI 第 7 引数: 訓練順序のシード (42 標準 = 従来と完全同一)。分散を測るため。
     let train_seed: u64 = std::env::args().nth(7).and_then(|s| s.parse().ok()).unwrap_or(42);
     let n_sample = 20;
@@ -192,7 +193,7 @@ fn main() {
     println!("  ★ 時間圧縮速度: {}x (音素長 {:.0}ms、 STDP 窓 80ms)", speed, 200.0 / speed);
     println!("  ★ 提示ゲイン: {}x / 子音合成: {} / biquad: {}", input_gain,
         if banded != 0 { "帯域つき (banded)" } else { "従来 (帯域指定を無視)" },
-        if magtrunc != 0 { "ゼロ方向切り捨て (自己発振なし)" } else { "従来 (24帯域が自己発振)" });
+        if legacy_biquad != 0 { "旧 算術シフト (24帯域が自己発振)" } else { "既定 ゼロ方向切り捨て (自己発振なし)" });
 
     let mut cfg = ThermoNetworkConfig::for_m1_cn_40();
     if decay_slow > 1 {
@@ -203,9 +204,9 @@ fn main() {
     }
     let mut net = ThermoNetwork::new(cfg);
     let mut cochlea = Cochlea::new();
-    if magtrunc != 0 {
+    if legacy_biquad != 0 {
         for b in cochlea.bands.iter_mut() {
-            b.magnitude_truncation = true;
+            b.magnitude_truncation = false; // 旧挙動 (自己発振あり) を再現
         }
     }
     let mut cn = CochlearNucleus::new();

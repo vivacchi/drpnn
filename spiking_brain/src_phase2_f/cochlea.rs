@@ -54,7 +54,9 @@ pub struct BandpassBiquad {
     /// 過去の出力 y[n-1], y[n-2]
     pub y1: i32,
     pub y2: i32,
-    /// Q15 の戻し方を「ゼロ方向切り捨て」にするか (既定 false = 従来の算術シフト)。
+    /// Q15 の戻し方を「ゼロ方向切り捨て」にするか (**既定 true**・2026-08-25 ユーザー判断 案ア)。
+    ///
+    /// `false` にすると従来の算術シフト (floor) に戻る = ロールバック経路。
     ///
     /// 2026-08-25 実測: 既定の `acc >> 15` (算術シフト = floor) では
     /// **40 帯域中 24 本のインパルス応答が減衰しきらず自己発振する**
@@ -113,7 +115,7 @@ impl BandpassBiquad {
             a1: (a1 * Q15_SCALE as f64).round() as i32,
             a2: (a2 * Q15_SCALE as f64).round() as i32,
             x1: 0, x2: 0, y1: 0, y2: 0,
-            magnitude_truncation: false,
+            magnitude_truncation: true,
         }
     }
 
@@ -445,11 +447,39 @@ mod tests {
         }
     }
 
-    /// 既定値は従来と完全同一 (バイト同一性の保証)。
+    /// 既定は ON (2026-08-25 ユーザー判断 案ア: 数学的に正しい方を基準にする)。
+    /// `false` に落とせば従来の算術シフトへロールバックできる。
     #[test]
-    fn magnitude_truncation_defaults_off() {
+    fn magnitude_truncation_defaults_on() {
         let bp = BandpassBiquad::new(1000.0, 1.0, 16000.0);
-        assert!(!bp.magnitude_truncation);
+        assert!(bp.magnitude_truncation, "既定は ゼロ方向切り捨て であるべき");
+        let mut legacy = BandpassBiquad::new(1000.0, 1.0, 16000.0);
+        legacy.magnitude_truncation = false;
+        // ロールバック経路が実際に別の波形を出すこと (経路が死んでいないことの確認)
+        let (mut a, mut b) = (Vec::new(), Vec::new());
+        let mut d = BandpassBiquad::new(1000.0, 1.0, 16000.0);
+        for n in 0..2000 {
+            let x = if n == 0 { 10000 } else { 0 };
+            a.push(d.process(x));
+            b.push(legacy.process(x));
+        }
+        assert_ne!(a, b, "ロールバック経路が既定と同じ出力になっている");
+    }
+
+    /// 既定の蝸牛は自己発振しない (出荷状態の不変条件)。
+    #[test]
+    fn default_cochlea_has_no_limit_cycles() {
+        let mut c = Cochlea::new();
+        for b in c.bands.iter_mut() {
+            let mut tail = 0i32;
+            for n in 0..4000 {
+                let y = b.process(if n == 0 { 10000 } else { 0 }).abs();
+                if n >= 3900 {
+                    tail = tail.max(y);
+                }
+            }
+            assert_eq!(tail, 0, "既定の蝸牛に自己発振する帯域がある");
+        }
     }
 
     /// 純音を入れて、その周波数で大きく、別周波数で小さく出力されること
