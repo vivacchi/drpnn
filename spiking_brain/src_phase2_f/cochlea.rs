@@ -537,6 +537,22 @@ mod tests {
         assert_ne!(a, b, "ロールバック経路が既定と同じ出力になっている");
     }
 
+    /// 自発発火は既定 OFF (2026-08-25 ユーザー判断 案イ)。
+    ///
+    /// 実装はしたが、`FireGenerator` が閾値+不応期の装置なのでレートが
+    /// 0Hz か 400Hz にしかならず、設計書 §3.6 の「50-100Hz」を満たせない (S9)。
+    /// 有効化するときは `spontaneous_amplitude` を明示的に設定すること。
+    #[test]
+    fn cochlea_spontaneous_defaults_off() {
+        let c = Cochlea::new();
+        assert_eq!(c.spontaneous_amplitude, 0, "蝸牛の自発発火は既定 OFF");
+        assert_eq!(c.spontaneous.len(), N_BANDS, "ノイズ源が帯域数だけ無い");
+        // 種が帯域ごとに違うこと (同期しないことの保証)
+        let seeds: std::collections::HashSet<u16> =
+            c.spontaneous.iter().map(|s| s.state).collect();
+        assert!(seeds.len() > N_BANDS / 2, "ノイズ源の種が重複しすぎている: {}", seeds.len());
+    }
+
     /// 既定の蝸牛は自己発振しない (出荷状態の不変条件)。
     #[test]
     fn default_cochlea_has_no_limit_cycles() {

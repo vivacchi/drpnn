@@ -906,6 +906,25 @@ impl ThermoNetwork {
 
 #[cfg(test)]
 mod tests {
+
+    /// 背景活動ノイズは既定 OFF (2026-08-25 ユーザー判断 案イ)。
+    ///
+    /// 疎ノイズ (振幅1・4step毎・1/16) は per-pair 混同を 5/5 で下げたが、
+    /// **試行単位の分離 (between) は 3/5 で悪化**し、合成した選択性は ±0.0000 だった。
+    /// 指標を変えると結論が変わるため既定 OFF のまま据え置く (詳細は
+    /// docs/language/HANDOFF_FROM_SPIKE.md §10.9)。
+    #[test]
+    fn spontaneous_jitter_defaults_off_network_wide() {
+        let net = ThermoNetwork::new(ThermoNetworkConfig::for_m1_cn_40());
+        assert!(net.neurons.iter().all(|n| n.spontaneous_jitter == 0),
+            "背景ノイズが既定で入っているニューロンがある");
+        // 種はニューロンごとに配られていること (有効化したとき同期しない保証)
+        let seeds: std::collections::HashSet<u16> =
+            net.neurons.iter().map(|n| n.jitter_state).collect();
+        assert!(seeds.len() > net.neurons.len() / 2,
+            "ノイズ源の種が重複しすぎている: {} / {}", seeds.len(), net.neurons.len());
+    }
+
     use super::*;
 
     #[test]
