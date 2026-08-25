@@ -16,7 +16,7 @@ use spiking_brain::phase2_f::thermo_network::{ThermoNetwork, ThermoNetworkConfig
 use spiking_brain::phase2_f::cochlea::{Cochlea, SAMPLES_PER_STEP};
 use spiking_brain::phase2_f::cochlear_nucleus::CochlearNucleus;
 use spiking_brain::phase2_f::phoneme_synth::{
-    standard_syllables, synth_syllable_scaled, LfsrNoise, Syllable,
+    standard_syllables, synth_syllable_banded, synth_syllable_scaled, LfsrNoise, Syllable,
 };
 use spiking_brain::trace::{cosine_similarity, OutputTrace};
 use rand::prelude::*;
@@ -168,6 +168,19 @@ fn main() {
     // CLI 第 3 引数: 減衰遅延倍率 (1 標準、 10 で conductance/vitality 減衰を 10x 遅く)
     // 時間スケール整合のもう半分: 痕跡を提示間隔より長持ちさせ音素固有構造を累積
     let decay_slow: i32 = std::env::args().nth(3).and_then(|s| s.parse().ok()).unwrap_or(1);
+    // CLI 第 4 引数: 提示ゲイン (1 標準 = 従来と完全同一)
+    // FIRE_THRESHOLD=200 は「純音 amp 8000 想定」だが、閾値は帯域ごとに効くのに対し
+    // 母音の最強フォルマントは 4000 = 設計点の半分。2 で設計点に合う (2026-08-25 実測)。
+    let input_gain: i32 = std::env::args().nth(4).and_then(|s| s.parse().ok()).unwrap_or(1);
+    // CLI 第 5 引数: 1 で帯域つき子音合成 (0 標準 = 従来と完全同一)
+    // 従来の synth_consonant は Plosive/Fricative の帯域指定を捨てており
+    // pa/ki/tu が構造的に同一波形だった (2026-08-25 発覚)。
+    let banded: i32 = std::env::args().nth(5).and_then(|s| s.parse().ok()).unwrap_or(0);
+    // CLI 第 6 引数: 1 で蝸牛 biquad をゼロ方向切り捨てに (0 標準 = 従来と完全同一)
+    // 既定の acc>>15 は 40 帯域中 24 本で自己発振する (2026-08-25 実測)。
+    let magtrunc: i32 = std::env::args().nth(6).and_then(|s| s.parse().ok()).unwrap_or(0);
+    // CLI 第 7 引数: 訓練順序のシード (42 標準 = 従来と完全同一)。分散を測るため。
+    let train_seed: u64 = std::env::args().nth(7).and_then(|s| s.parse().ok()).unwrap_or(42);
     let n_sample = 20;
     let snap_interval = if n_train >= 500 { 500 } else { (n_train / 10).max(10) };
 
@@ -177,6 +190,9 @@ fn main() {
     println!("  M1:   84 入力 → 40 出力 (grid 20×26)");
     println!("  音素: pa, ki, tu, se, mo");
     println!("  ★ 時間圧縮速度: {}x (音素長 {:.0}ms、 STDP 窓 80ms)", speed, 200.0 / speed);
+    println!("  ★ 提示ゲイン: {}x / 子音合成: {} / biquad: {}", input_gain,
+        if banded != 0 { "帯域つき (banded)" } else { "従来 (帯域指定を無視)" },
+        if magtrunc != 0 { "ゼロ方向切り捨て (自己発振なし)" } else { "従来 (24帯域が自己発振)" });
 
     let mut cfg = ThermoNetworkConfig::for_m1_cn_40();
     if decay_slow > 1 {
@@ -187,6 +203,11 @@ fn main() {
     }
     let mut net = ThermoNetwork::new(cfg);
     let mut cochlea = Cochlea::new();
+    if magtrunc != 0 {
+        for b in cochlea.bands.iter_mut() {
+            b.magnitude_truncation = true;
+        }
+    }
     let mut cn = CochlearNucleus::new();
     let syllables = standard_syllables();
     let mut noise = LfsrNoise::new(0xACE1);
@@ -195,7 +216,16 @@ fn main() {
     let trial_samples = (TRIAL_DURATION_MS * 16000.0 / 1000.0) as usize;  // 4800
     let waveforms: Vec<Vec<i32>> = syllables.iter()
         .map(|s| {
-            let base = synth_syllable_scaled(s, &mut noise, speed);
+            let base = if banded != 0 {
+                synth_syllable_banded(s, &mut noise, speed)
+            } else {
+                synth_syllable_scaled(s, &mut noise, speed)
+            };
+            let base: Vec<i32> = if input_gain != 1 {
+                base.iter().map(|&x| x.saturating_mul(input_gain)).collect()
+            } else {
+                base
+            };
             if speed <= 1.0 {
                 base  // 従来通り (tile しない)
             } else {
@@ -216,7 +246,7 @@ fn main() {
     evaluate(&mut net, &mut cochlea, &mut cn, &syllables, &waveforms, n_sample, "PRE");
 
     println!("\n== Phase 2: 訓練 {n_train} 試行 ==");
-    let mut rng = StdRng::seed_from_u64(42);
+    let mut rng = StdRng::seed_from_u64(train_seed);
     for trial in 1..=n_train {
         let si = rng.gen_range(0..syllables.len());
         let _ = present_syllable(&mut net, &mut cochlea, &mut cn, &waveforms[si]);

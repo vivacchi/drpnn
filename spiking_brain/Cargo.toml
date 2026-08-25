@@ -137,6 +137,26 @@ path = "src_phase2_f/bin/m1_hash_probe.rs"
 name = "consonant_probe"
 path = "src_phase2_f/bin/consonant_probe.rs"
 
+# Phase 2 Fork F: 蝸牛 整数 biquad の自己発振検査 (S6)
+[[bin]]
+name = "biquad_limit_cycle"
+path = "src_phase2_f/bin/biquad_limit_cycle.rs"
+
+# Phase 2 Fork F: 蝸牛ゲート 計器修正版 (S5)
+[[bin]]
+name = "cochlea_gates_v2"
+path = "src_phase2_f/bin/cochlea_gates_v2.rs"
+
+# Phase 2 Fork F: 蝸牛の校正は帯域ごとに成り立っているか (S3 検証)
+[[bin]]
+name = "cochlea_calibration"
+path = "src_phase2_f/bin/cochlea_calibration.rs"
+
+# Phase 2 Fork F: 蝸牛の上限周波数 F_MAX は上げられるか (S2 検証)
+[[bin]]
+name = "fmax_sweep"
+path = "src_phase2_f/bin/fmax_sweep.rs"
+
 # Phase 3: M0 蝸牛 → M1 3D HCP 配置版 パイプライン (2D 版との直接比較用)
 [[bin]]
 name = "m0_m1_3d_pipeline"

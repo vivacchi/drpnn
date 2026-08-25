@@ -368,8 +368,13 @@ pub fn synth_consonant_banded(c: Consonant, duration_ms: f64, noise: &mut LfsrNo
             }
             normalize_rms(out, TARGET_RMS)
         }
-        // 鼻音は既に f1/f2 を使っているので既存実装をそのまま呼ぶ
-        Consonant::Nasal { .. } | Consonant::None => synth_consonant(c, duration_ms, noise),
+        // 鼻音は既に f1/f2 を使っているので波形生成は既存実装に委ねるが、
+        // **RMS 正規化は掛ける** (2026-08-25 修正)。
+        // 初版は素通ししており、mo だけ RMS 4189 と他子音 5657 より 26% 小さかった。
+        // これは「全子音を同一 RMS に揃える」という本関数自身の宣言に反する実装バグ
+        // (独立レビューで発覚)。既存 `synth_consonant` 側の 2026-05-30 校正は変えない。
+        Consonant::Nasal { .. } => normalize_rms(synth_consonant(c, duration_ms, noise), TARGET_RMS),
+        Consonant::None => Vec::new(),
     }
 }
 
@@ -512,6 +517,18 @@ mod tests {
 
     fn wave_rms(w: &[i32]) -> f64 {
         (w.iter().map(|&v| (v as f64) * (v as f64)).sum::<f64>() / w.len() as f64).sqrt()
+    }
+
+    /// 鼻音も含めて全帯域子音の RMS が揃うこと (2026-08-25 のレビュー指摘の回帰テスト)。
+    /// 初版は Nasal だけ normalize_rms を素通りしており mo が 26% 小さかった。
+    #[test]
+    fn banded_nasal_shares_rms_with_others() {
+        let nasal = synth_consonant_banded(
+            Consonant::Nasal { f1: 250.0, f2: 1500.0 }, 30.0, &mut LfsrNoise::new(0xACE1));
+        let plos = synth_consonant_banded(plosive(500.0, 2000.0), 30.0, &mut LfsrNoise::new(0xACE1));
+        let (rn, rp) = (wave_rms(&nasal), wave_rms(&plos));
+        assert!((rn - rp).abs() / rp < 0.20,
+                "鼻音 RMS {:.0} が破裂音 {:.0} と揃っていない", rn, rp);
     }
 
     /// 振幅校正: 全帯域子音の RMS が 5657 (= 純音 amp 8000 の RMS) に揃う。

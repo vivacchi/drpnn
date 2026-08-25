@@ -54,6 +54,24 @@ pub struct BandpassBiquad {
     /// 過去の出力 y[n-1], y[n-2]
     pub y1: i32,
     pub y2: i32,
+    /// Q15 の戻し方を「ゼロ方向切り捨て」にするか (既定 false = 従来の算術シフト)。
+    ///
+    /// 2026-08-25 実測: 既定の `acc >> 15` (算術シフト = floor) では
+    /// **40 帯域中 24 本のインパルス応答が減衰しきらず自己発振する**
+    /// (帯域0 fc=50Hz は前半 max|y|=1876 に対し n>=3900 の末尾 max|y|=2491 で増大)。
+    /// 極半径 r=0.994108 の理論減衰は 1275 サンプルなので、フィルタが自分の
+    /// 線形ダイナミクスに従っていない = 量子化由来のリミットサイクル。
+    ///
+    /// 丸めモード比較 (F_MAX=4000・40帯域・4000サンプル):
+    ///   `acc >> 15`        (floor)          残存 24 帯域・最悪 2491
+    ///   `(acc+1<<14) >> 15` (最近接)         残存 40 帯域・最悪 1231 (悪化)
+    ///   `acc / 32768`      (ゼロ方向)       **残存 0 帯域・最悪 0**
+    ///
+    /// ゼロ方向切り捨ては常に |y| を減らすので受動的な損失として働き、
+    /// リミットサイクルを構造的に不可能にする (固定小数点 IIR の定石)。
+    /// 正解はフィルタ理論側にある — 安定な線形フィルタの
+    /// インパルス応答はゼロに収束する。調整パラメータではない。
+    pub magnitude_truncation: bool,
 }
 
 impl BandpassBiquad {
@@ -95,6 +113,7 @@ impl BandpassBiquad {
             a1: (a1 * Q15_SCALE as f64).round() as i32,
             a2: (a2 * Q15_SCALE as f64).round() as i32,
             x1: 0, x2: 0, y1: 0, y2: 0,
+            magnitude_truncation: false,
         }
     }
 
@@ -109,7 +128,14 @@ impl BandpassBiquad {
             + (self.b2 as i64) * (self.x2 as i64)
             - (self.a1 as i64) * (self.y1 as i64)
             - (self.a2 as i64) * (self.y2 as i64);
-        let y0 = (acc >> 15) as i32;
+        let y0 = if self.magnitude_truncation {
+            // ゼロ方向切り捨て = 受動的損失。除算器を使わずシフトと条件加算だけで書く
+            // (DRP には除算器が無い前提。`acc / 32768` と厳密に同値・テストで固定)。
+            let bias: i64 = if acc < 0 { 32767 } else { 0 };
+            ((acc + bias) >> 15) as i32
+        } else {
+            (acc >> 15) as i32 // 従来 (算術シフト = floor)
+        };
 
         // 状態更新
         self.x2 = self.x1;
@@ -366,6 +392,66 @@ impl Default for Cochlea {
 mod tests {
     use super::*;
 
+    /// 40 帯域のうち、インパルス応答が末尾までゼロに落ちない帯域数を数える。
+    fn limit_cycling_bands(magtrunc: bool) -> usize {
+        let freqs = erb_spaced_freqs(F_MIN_HZ, F_MAX_HZ, N_BANDS);
+        let mut bad = 0;
+        for &fc in freqs.iter() {
+            let mut bp = BandpassBiquad::new(fc, erb_q_factor(fc), 16000.0);
+            bp.magnitude_truncation = magtrunc;
+            let mut tail = 0i32;
+            for n in 0..4000 {
+                let y = bp.process(if n == 0 { 10000 } else { 0 }).abs();
+                if n >= 3900 {
+                    tail = tail.max(y);
+                }
+            }
+            if tail != 0 {
+                bad += 1;
+            }
+        }
+        bad
+    }
+
+    /// 既定の算術シフトでは自己発振が起きることを固定する (バグの記録・2026-08-25)。
+    /// 仕様ではない。`magnitude_truncation` が直す対象。
+    #[test]
+    fn default_shift_produces_limit_cycles() {
+        assert_eq!(limit_cycling_bands(false), 24,
+            "既定の acc>>15 で自己発振する帯域数が変わった");
+    }
+
+    /// ゼロ方向切り捨てなら 1 本も自己発振しない。
+    /// 正解の出どころ: 安定な線形フィルタのインパルス応答はゼロに収束する (フィルタ理論)。
+    #[test]
+    fn magnitude_truncation_kills_limit_cycles() {
+        assert_eq!(limit_cycling_bands(true), 0,
+            "ゼロ方向切り捨てでも自己発振が残る");
+    }
+
+    /// ゼロ方向切り捨ての実装 (シフト + 条件加算) が整数除算と厳密同値であること。
+    /// DRP には除算器が無いので、この同値性が「実機に載る」ことの根拠になる。
+    #[test]
+    fn magnitude_truncation_equals_division_without_divider() {
+        for acc in [
+            0i64, 1, -1, 32767, -32767, 32768, -32768, 32769, -32769,
+            1_000_000, -1_000_000, 123_456_789, -123_456_789,
+            i32::MAX as i64, i32::MIN as i64,
+        ] {
+            let bias: i64 = if acc < 0 { 32767 } else { 0 };
+            let shifted = (acc + bias) >> 15;
+            assert_eq!(shifted, acc / 32768,
+                "acc={} でシフト実装 {} が除算 {} と不一致", acc, shifted, acc / 32768);
+        }
+    }
+
+    /// 既定値は従来と完全同一 (バイト同一性の保証)。
+    #[test]
+    fn magnitude_truncation_defaults_off() {
+        let bp = BandpassBiquad::new(1000.0, 1.0, 16000.0);
+        assert!(!bp.magnitude_truncation);
+    }
+
     /// 純音を入れて、その周波数で大きく、別周波数で小さく出力されること
     fn sine_wave(fc: f64, sample_rate: f64, n_samples: usize, amplitude: i32) -> Vec<i32> {
         (0..n_samples).map(|i| {
@@ -543,15 +629,19 @@ mod tests {
     // ─── Step 3 テスト ───
 
     #[test]
-    fn cochlea_constructs_with_20_bands() {
+    fn cochlea_constructs_with_n_bands() {
+        // 2026-08-25 修正: 20 をハードコードしていたため N_BANDS 20->40 拡張以降
+        // ずっと FAILED のままだった。`Cochlea::process_step` は定数 N_BANDS で
+        // ループするので、**この長さ不変条件を守るテストはこれ 1 本しかない**
+        // (独立レビュー指摘)。定数に追従させて本来の役目を果たさせる。
         let c = Cochlea::new();
-        assert_eq!(c.bands.len(), 20);
-        assert_eq!(c.envelopes.len(), 20);
-        assert_eq!(c.fire_gens.len(), 20);
-        assert_eq!(c.center_freqs.len(), 20);
-        // 周波数範囲
-        assert!((c.center_freqs[0] - 50.0).abs() < 1.0);
-        assert!((c.center_freqs[19] - 4000.0).abs() < 5.0);
+        assert_eq!(c.bands.len(), N_BANDS);
+        assert_eq!(c.envelopes.len(), N_BANDS);
+        assert_eq!(c.fire_gens.len(), N_BANDS);
+        assert_eq!(c.center_freqs.len(), N_BANDS);
+        // 周波数範囲は定数どおり (端点は erb_spaced_freqs が厳密に取る)
+        assert!((c.center_freqs[0] - F_MIN_HZ).abs() < 1.0);
+        assert!((c.center_freqs[N_BANDS - 1] - F_MAX_HZ).abs() < 5.0);
     }
 
     /// 純音入力でその周波数帯域のみが発火する (周波数選択性)
