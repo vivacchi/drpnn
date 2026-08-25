@@ -68,7 +68,7 @@ pub fn freq_to_phase_step(f_hz: f64) -> u32 {
 // ──────────────────────────────────────────────────────────────
 
 /// 母音 1 つを定義する 3 フォルマント. 周波数 [Hz] と振幅比 (× 1024 で整数化).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Vowel {
     pub label: char,
     pub formants_hz: [f64; 3],  // F1, F2, F3
@@ -407,6 +407,28 @@ pub enum Consonant {
     Nasal { f1: f64, f2: f64 },
     /// 子音なし (「あいうえお」など母音のみのかな)
     None,
+    /// **接近音** /j/ /w/ (2026-08-26 追加)。
+    ///
+    /// ヤ行・ワ行。母音的だが F1/F2 が母音と違う位置から始まる。
+    /// 遷移 (formant transition) は未実装なので、**その位置の短い有声区間**で近似する。
+    /// /j/ ≈ F1 300 / F2 2200 (硬口蓋)、 /w/ ≈ F1 300 / F2 700 (両唇軟口蓋)。
+    ///
+    /// これを入れる前は `Consonant::None` で近似しており、
+    /// **や=あ / ゆ=う / よ=お / わ=あ / を=お が完全に同一の応答**になっていた (実測)。
+    Approximant { f1: f64, f2: f64 },
+    /// **破擦音** /ts/ /tɕ/ (2026-08-26 追加)。
+    ///
+    /// タ行の「つ」「ち」。破裂 (閉鎖の開放) の直後に摩擦が続く複合音。
+    /// 破裂区間と摩擦区間を連結して作る。
+    ///
+    /// これを入れる前は摩擦音のみで近似しており、
+    /// **す=つ / し=ち が完全に同一の応答**になっていた (実測)。
+    Affricate {
+        burst_freq_low: f64,
+        burst_freq_high: f64,
+        fric_freq_low: f64,
+        fric_freq_high: f64,
+    },
 }
 
 /// 子音波形を生成. duration_ms: 持続時間.
@@ -470,6 +492,18 @@ pub fn synth_consonant(c: Consonant, duration_ms: f64, noise: &mut LfsrNoise) ->
             }
         }
         Consonant::None => {}
+        // 2026-08-26 追加。旧実装は帯域指定を無視する設計なので、
+        // 接近音は鼻音相当・破擦音は破裂音相当で近似する (旧経路の連続性のため)。
+        Consonant::Approximant { f1, f2 } => {
+            return synth_consonant(Consonant::Nasal { f1, f2 }, duration_ms, noise);
+        }
+        Consonant::Affricate { burst_freq_low, burst_freq_high, .. } => {
+            return synth_consonant(
+                Consonant::Plosive { burst_freq_low, burst_freq_high },
+                duration_ms,
+                noise,
+            );
+        }
     }
     out
 }
@@ -590,6 +624,34 @@ pub fn synth_consonant_banded(c: Consonant, duration_ms: f64, noise: &mut LfsrNo
                 out.push((n * env) >> 10);
             }
             normalize_rms(out, TARGET_RMS)
+        }
+        // 接近音: その位置の短い有声区間 (鼻音と同じ 2 フォルマント合成) で近似
+        Consonant::Approximant { f1, f2 } => {
+            normalize_rms(
+                synth_consonant(Consonant::Nasal { f1, f2 }, duration_ms, noise),
+                TARGET_RMS,
+            )
+        }
+        // 破擦音: 破裂 (前半) + 摩擦 (後半) を連結
+        Consonant::Affricate {
+            burst_freq_low,
+            burst_freq_high,
+            fric_freq_low,
+            fric_freq_high,
+        } => {
+            let burst_ms = duration_ms * 0.4;
+            let fric_ms = duration_ms - burst_ms;
+            let mut w = synth_consonant_banded(
+                Consonant::Plosive { burst_freq_low, burst_freq_high },
+                burst_ms,
+                noise,
+            );
+            w.extend(synth_consonant_banded(
+                Consonant::Fricative { freq_low: fric_freq_low, freq_high: fric_freq_high },
+                fric_ms,
+                noise,
+            ));
+            normalize_rms(w, TARGET_RMS)
         }
         // 鼻音は既に f1/f2 を使っているので波形生成は既存実装に委ねるが、
         // **RMS 正規化は掛ける** (2026-08-25 修正)。

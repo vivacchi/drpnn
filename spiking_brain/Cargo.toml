@@ -162,6 +162,11 @@ path = "src_phase2_f/bin/rate_code.rs"
 name = "level_axis"
 path = "src_phase2_f/bin/level_axis.rs"
 
+# Phase 2 Fork F: かなは音として通るか
+[[bin]]
+name = "kana_probe"
+path = "src_phase2_f/bin/kana_probe.rs"
+
 # Phase 2 Fork F: M0 の設計点を M0.5 出力で取り直す (v3)
 [[bin]]
 name = "m0_design_v3"

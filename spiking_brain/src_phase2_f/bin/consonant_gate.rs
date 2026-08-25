@@ -117,7 +117,11 @@ fn target_bands(c: Consonant, freqs: &[f64]) -> (Vec<usize>, f64) {
             v.dedup();
             (v, 0.0)
         }
-        Consonant::None => (Vec::new(), 0.0),
+        // 2026-08-26 に追加された variant。この probe は
+        // standard_syllables() の 5 音素専用なので到達しない。
+        Consonant::None | Consonant::Approximant { .. } | Consonant::Affricate { .. } => {
+            (Vec::new(), 0.0)
+        }
     }
 }
 
@@ -156,6 +160,11 @@ fn main() {
             }
             Consonant::Nasal { f1, f2 } => format!("f1={:.0} f2={:.0}Hz", f1, f2),
             Consonant::None => "なし".to_string(),
+            Consonant::Approximant { f1, f2 } => format!("接近音 f1={:.0} f2={:.0}Hz", f1, f2),
+            Consonant::Affricate { burst_freq_low, burst_freq_high, fric_freq_low, fric_freq_high } => {
+                format!("破擦 {:.0}-{:.0}/{:.0}-{:.0}Hz",
+                        burst_freq_low, burst_freq_high, fric_freq_low, fric_freq_high)
+            }
         };
         println!(
             "  {:>2}: 指定 {:<16} 可測域内の帯域 {:>2} 本  表現できない割合 {:>5.1}%",

@@ -268,7 +268,11 @@ fn measure_cheap(freqs: &[f64], q: f64, thr: i32) -> R {
                 v.dedup();
                 v
             }
-            Consonant::None => Vec::new(),
+            // 2026-08-26 に追加された variant。これらの probe は
+            // standard_syllables() の 5 音素専用なので到達しない。
+            Consonant::None | Consonant::Approximant { .. } | Consonant::Affricate { .. } => {
+                Vec::new()
+            }
         };
         ch_den += tgt.len();
         ch_hit += tgt.iter().filter(|&&b| cp[k][b]).count();
