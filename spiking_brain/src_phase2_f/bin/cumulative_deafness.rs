@@ -80,7 +80,55 @@ fn silence(cochlea: &mut Cochlea, cn: &mut CochlearNucleus, n_ms: f64) {
     }
 }
 
+/// G49: 刺激**内**で適応が生きているか。
+///
+/// 「有界にする」を「適応を消す」で通していないかの検査。
+/// 持続音を流し、前半 (オンセット直後) と後半の発火数を比べる。
+/// 正解の出どころ = 音を持続させたのは実験者。
+/// 適応があれば後半 < 前半になるはず。
+fn within_stimulus_adaptation() {
+    use spiking_brain::phase2_f::phoneme_synth::{synth_vowel, vowels};
+    println!("--- G49 刺激内の適応 (持続音 500ms・前半 vs 後半) ---");
+    println!("音素  M0前半  M0後半  M0比   M0.5前半  M0.5後半  M0.5比   Octopus前半/後半");
+    let vs = vowels();
+    let names = ["a", "i", "u", "e", "o"];
+    for (k, v) in vs.iter().enumerate() {
+        let wave = synth_vowel(v, 500.0);
+        let mut co = Cochlea::new();
+        let mut cn = CochlearNucleus::new();
+        let half = wave.len() / 2;
+        let (mut m0a, mut m0b, mut m5a, mut m5b, mut oa, mut ob) = (0u32, 0u32, 0u32, 0u32, 0u32, 0u32);
+        let mut pos = 0usize;
+        for chunk in wave.chunks(SAMPLES_PER_STEP) {
+            if chunk.len() < SAMPLES_PER_STEP {
+                break;
+            }
+            let out = co.process_step(chunk);
+            let cn_out = cn.process_step(&out);
+            let m0 = out.iter().filter(|&&x| x != 0).count() as u32;
+            let m5 = cn_out.iter().filter(|&&x| x != 0).count() as u32;
+            let o = cn_out.iter().take(N_OCTOPUS).filter(|&&x| x != 0).count() as u32;
+            if pos < half {
+                m0a += m0; m5a += m5; oa += o;
+            } else {
+                m0b += m0; m5b += m5; ob += o;
+            }
+            pos += SAMPLES_PER_STEP;
+        }
+        println!(
+            "{:>4}  {:>6}  {:>6}  {:>4.2}   {:>8}  {:>8}  {:>6.2}   {:>7}/{}",
+            names[k], m0a, m0b, m0b as f64 / m0a.max(1) as f64,
+            m5a, m5b, m5b as f64 / m5a.max(1) as f64, oa, ob
+        );
+        let _ = k;
+    }
+    println!("  M0 比が ~1.0 なのは正常 (蝸牛に適応は無い)。");
+    println!("  M0.5 比が < 1.0 なら**適応が生きている**。~1.0 なら適応が消えている。");
+    println!();
+}
+
 fn main() {
+    within_stimulus_adaptation();
     let syl = standard_syllables()[0]; // pa
     let mut noise = LfsrNoise::new(0xACE1);
     let wave = synth_syllable_scaled(&syl, &mut noise, 1.0);

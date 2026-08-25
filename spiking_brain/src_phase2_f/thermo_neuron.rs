@@ -48,7 +48,31 @@ pub struct ThermoNeuron {
     pub enthalpy_max: i32,
     /// エンタルピーの回復速度 (per step)
     pub enthalpy_recovery_rate: i32,
-    /// エントロピー散逸: entropy_decay_interval step に 1 回 entropy -= entropy_decay_rate
+    /// エントロピー散逸の**比例項**の shift (2026-08-25 追加)。
+    ///
+    /// 散逸 = `max(local_entropy >> entropy_decay_shift, entropy_decay_rate)`。
+    ///
+    /// **なぜ比例項が要るか**: 旧実装は一定レートの線形散逸だったので、
+    /// 生成が散逸を上回ると**際限なく溜まる**（上限が無い）。実測で M0.5 は
+    /// 同じ音節を 120 回提示すると応答が **15%** まで落ち、10 秒の無音を挟んでも
+    /// 27% までしか戻らなかった（適応ではなく**累積失聴**）。
+    /// 線形散逸には**時定数が存在しない**ので、平衡点も存在しない。
+    ///
+    /// **なぜ比例が物理的に正しいか**: DESIGN_PHILOSOPHY §11 は
+    /// エントロピー散逸を「熱の自然減衰（放熱）」と定義している。
+    /// **放熱は温度差に比例する**（ニュートンの冷却則）。
+    /// 一定レートで放熱する物体は存在しない。`EnvelopeDetector` は既にこの形。
+    ///
+    /// **なぜ `max(..., rate)` が要るか**: 整数演算では
+    /// `local_entropy < 2^shift` のとき比例項が 0 になり、**残留が永久に残る**。
+    /// 一定レートを下限に置くことで「**使われなければ 0 まで冷める**」が保証される。
+    /// 発火し続けるものだけが比例項の支配する**中間の平衡点**に落ち着く。
+    ///
+    /// **値の導き方（当てはめではない）**: `2^shift ≈ entropy_per_spike / entropy_decay_rate`。
+    /// これは旧実装が「1 発火ぶんのエントロピーを散逸しきる時間」として
+    /// 設計していた時定数そのもの（`make_octopus` の「80 を 400 step (200ms) で散逸」）。
+    pub entropy_decay_shift: i32,
+    /// エントロピー散逸: entropy_decay_interval step に 1 回 entropy -= 散逸量
     /// (整数演算で 1/N step の散逸速度を実現)
     pub entropy_decay_rate: i32,
     pub entropy_decay_interval: i32,
@@ -132,6 +156,8 @@ impl ThermoNeuron {
             enthalpy_recovery_rate: 1,
             entropy_decay_rate: 1,
             entropy_decay_interval: 50,
+            // 2^shift ≈ entropy_per_spike / entropy_decay_rate = 10/1 → shift 3 (=8)
+            entropy_decay_shift: 3,
             entropy_decay_counter: 0,
             entropy_per_spike: 10,
             is_inhibitory: false,
@@ -165,6 +191,8 @@ impl ThermoNeuron {
             enthalpy_recovery_rate: 1,
             entropy_decay_rate: 1,
             entropy_decay_interval: 50,
+            // 2^shift ≈ entropy_per_spike / entropy_decay_rate = 10/1 → shift 3 (=8)
+            entropy_decay_shift: 3,
             entropy_decay_counter: 0,
             entropy_per_spike: 10,
             is_inhibitory: true,
@@ -210,6 +238,8 @@ impl ThermoNeuron {
             enthalpy_recovery_rate: 10,
             entropy_decay_rate: 1,
             entropy_decay_interval: 1,
+            // 入力ニューロンは entropy_per_spike=0 (生成しない) ので比例項は効かない
+            entropy_decay_shift: 3,
             entropy_decay_counter: 0,
             entropy_per_spike: 0,
             is_inhibitory: false,
@@ -300,7 +330,11 @@ impl ThermoNeuron {
         if self.entropy_decay_counter >= self.entropy_decay_interval {
             self.entropy_decay_counter = 0;
             if self.local_entropy > 0 {
-                self.local_entropy -= self.entropy_decay_rate;
+                // 散逸 = 比例項 (放熱 ∝ 温度差) と 一定レート の大きい方。
+                // 比例項が高エントロピー側で平衡点を作り、
+                // 一定レートが低エントロピー側で「0 まで冷める」を保証する。
+                let proportional = self.local_entropy >> self.entropy_decay_shift;
+                self.local_entropy -= proportional.max(self.entropy_decay_rate);
                 if self.local_entropy < 0 { self.local_entropy = 0; }
             }
         }

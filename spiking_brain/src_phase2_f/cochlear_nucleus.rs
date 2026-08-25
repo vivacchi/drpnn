@@ -54,6 +54,8 @@ fn make_octopus(coincidence_th: i32) -> ThermoNeuron {
     n.entropy_per_spike = 80;
     n.entropy_decay_rate = 1;
     n.entropy_decay_interval = 5;  // 80 を 400 step (200ms) で散逸
+    // 2^shift ≈ entropy_per_spike / entropy_decay_rate = 80/1 → shift 6 (=64)
+    n.entropy_decay_shift = 6;
     // 自発活動なし (純粋な検出器)
     n.spontaneous_input = 0;
     n.generates_entropy = true;
@@ -75,6 +77,8 @@ fn make_bushy() -> ThermoNeuron {
     n.entropy_per_spike = 40;
     n.entropy_decay_rate = 1;
     n.entropy_decay_interval = 5;  // 40 を 200 step (100ms) で散逸 → 100ms 周期で再オンセット検出
+    // 2^shift ≈ 40/1 → shift 5 (=32)
+    n.entropy_decay_shift = 5;
     n.spontaneous_input = 0;
     n.generates_entropy = true;
     n
@@ -95,6 +99,8 @@ fn make_stellate() -> ThermoNeuron {
     n.entropy_per_spike = 5;
     n.entropy_decay_rate = 1;
     n.entropy_decay_interval = 50;
+    // 2^shift ≈ 5/1 → shift 2 (=4)
+    n.entropy_decay_shift = 2;
     n.spontaneous_input = 0;
     n.generates_entropy = true;
     n
