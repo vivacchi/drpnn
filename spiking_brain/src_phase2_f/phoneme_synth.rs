@@ -294,13 +294,31 @@ pub fn synth_vowel_f0(vowel: &Vowel, f0_hz: f64, duration_ms: f64) -> Vec<i32> {
             )
         })
         .collect();
-    let mut raw = Vec::with_capacity(n_samples);
+    let mut voiced = Vec::with_capacity(n_samples);
     for &x in source.iter() {
         let mut sample = 0i32;
         for r in resonators.iter_mut() {
             sample = sample.saturating_add(r.process(x));
         }
-        raw.push(sample);
+        voiced.push(sample);
+    }
+
+    // **唇からの放射特性** (2026-08-26 追加)。
+    //
+    // 本物の音声生成は 3 段:
+    //   声帯源 (-12 dB/oct) → 声道の共鳴 (フォルマント) → **唇からの放射 (+6 dB/oct)**
+    // 3 段目を落とすと全体が -12 dB/oct のままになり、**F0 と低次倍音が支配的**になる。
+    // 実測 (2026-08-26): 放射なしだと /a/ も /i/ も上位が 91-207Hz (F0 の低次倍音) で
+    // 埋まり、母音の識別率が**全 Q で 0.0%** (チャンス 15.8%) になった。
+    // 共鳴器自体は効いていた (/a/ は 802Hz、/i/ は 307Hz が立っていた) が、
+    // 源の低域に埋もれていた。
+    //
+    // 放射は一次差分 (微分) = +6 dB/oct。整数・決定論的。
+    let mut raw = Vec::with_capacity(n_samples);
+    let mut prev = 0i32;
+    for &v in voiced.iter() {
+        raw.push(v.saturating_sub(prev));
+        prev = v;
     }
 
     // **RMS を `synth_vowel` (純音3本版) に揃える** (2026-08-25)。

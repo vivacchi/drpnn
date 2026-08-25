@@ -214,6 +214,121 @@ fn main() {
         println!("  = 音程を変えても同じ母音として読める表現になっている。");
     }
 
+    // --- 合成器の検算: フォルマントは実際にスペクトルを形づくっているか ---
+    //
+    // 識別率 0% が「モデルの性質」なのか「私の合成器の誤り」なのかを分ける。
+    // 共鳴器が効いていれば、フォルマント付近の帯域が強くなるはず。
+    println!();
+    println!("--- 合成器の検算: /a/(F1=800,F2=1300) と /i/(F1=300,F2=2300) を F0=100 で ---");
+    let freqs2 = Cochlea::new().center_freqs.clone();
+    for &(vi, nm) in [(0usize, "a"), (1usize, "i")].iter() {
+        let c = band_spikes(&synth_vowel_f0(&vs[vi], 100.0, VOWEL_MS));
+        let top: Vec<String> = {
+            let mut idx: Vec<usize> = (0..N_BANDS).filter(|&i| c[i] > 0).collect();
+            idx.sort_by_key(|&i| std::cmp::Reverse(c[i]));
+            idx.iter().take(8).map(|&i| format!("{:.0}Hz×{}", freqs2[i], c[i])).collect()
+        };
+        println!("  /{}/ 指定 F1={:.0} F2={:.0} F3={:.0}",
+                 nm, vs[vi].formants_hz[0], vs[vi].formants_hz[1], vs[vi].formants_hz[2]);
+        println!("      発火上位8: {}", top.join(", "));
+    }
+    println!("  共鳴器が効いていれば、上位はフォルマント付近に集まるはず。");
+    println!("  倍音位置 (100Hz の倍数) に均等なら、共鳴器が効いていないか");
+    println!("  高 Q で倍音が分解されて包絡が読めていない。");
+
+    // --- G55: 母音の識別 (飽和しない指標) ---
+    //
+    // コサインが 0.999 台に張り付いているのが**指標の飽和**なのか**実体**なのかを分ける。
+    // 識別率は 0-100% の全域を取るので飽和しない。
+    // 正解の出どころ = どれが同じ母音かは実験者が決めた。
+    //
+    // 全 20 条件 (5 母音 × 4 F0) から 1 つ取り、残り 19 の中で最近傍を取る。
+    // チャンスレベル = 3/19 = 15.8% (除いた条件以外で同じ母音は 3、違う母音は 16)。
+    println!();
+    println!("--- G55 母音の識別 (飽和しない指標) ---");
+    println!(" Q   識別率  コサインの幅(別母音)  中心化コサインでの識別率");
+    for &q in [1.0f64, 2.0, 3.0, 4.0, 6.0].iter() {
+        let mut conds: Vec<(usize, [u32; N_BANDS])> = Vec::new();
+        for (k, v) in vs.iter().enumerate() {
+            for &f0 in F0S.iter() {
+                conds.push((k, band_spikes_q(&synth_vowel_f0(v, f0, VOWEL_MS), q)));
+            }
+        }
+        // 生のコサインで 1-NN
+        let mut hit = 0usize;
+        for i in 0..conds.len() {
+            let mut best = (-2.0f64, usize::MAX);
+            for j in 0..conds.len() {
+                if i == j {
+                    continue;
+                }
+                let c = cosine(&conds[i].1, &conds[j].1);
+                if c > best.0 {
+                    best = (c, conds[j].0);
+                }
+            }
+            if best.1 == conds[i].0 {
+                hit += 1;
+            }
+        }
+        // 別母音ペアのコサインの幅 (飽和の可視化)
+        let mut lo = f64::INFINITY;
+        let mut hi = f64::NEG_INFINITY;
+        for i in 0..conds.len() {
+            for j in (i + 1)..conds.len() {
+                if conds[i].0 != conds[j].0 {
+                    let c = cosine(&conds[i].1, &conds[j].1);
+                    lo = lo.min(c);
+                    hi = hi.max(c);
+                }
+            }
+        }
+        // 中心化 (共通成分を引く) してから 1-NN
+        let mut mean = [0f64; N_BANDS];
+        for (_, c) in conds.iter() {
+            for b in 0..N_BANDS {
+                mean[b] += c[b] as f64 / conds.len() as f64;
+            }
+        }
+        let centered: Vec<(usize, Vec<f64>)> = conds
+            .iter()
+            .map(|(k, c)| (*k, (0..N_BANDS).map(|b| c[b] as f64 - mean[b]).collect()))
+            .collect();
+        let cosf = |a: &Vec<f64>, b: &Vec<f64>| -> f64 {
+            let d: f64 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+            let na: f64 = a.iter().map(|x| x * x).sum::<f64>().sqrt();
+            let nb: f64 = b.iter().map(|x| x * x).sum::<f64>().sqrt();
+            if na == 0.0 || nb == 0.0 { 0.0 } else { d / (na * nb) }
+        };
+        let mut hit_c = 0usize;
+        for i in 0..centered.len() {
+            let mut best = (-2.0f64, usize::MAX);
+            for j in 0..centered.len() {
+                if i == j {
+                    continue;
+                }
+                let c = cosf(&centered[i].1, &centered[j].1);
+                if c > best.0 {
+                    best = (c, centered[j].0);
+                }
+            }
+            if best.1 == centered[i].0 {
+                hit_c += 1;
+            }
+        }
+        println!(
+            "{:>2}x  {:>5.1}%  {:>20}  {:>23.1}%",
+            q,
+            hit as f64 / conds.len() as f64 * 100.0,
+            format!("{:.4}-{:.4} (幅{:.4})", lo, hi, hi - lo),
+            hit_c as f64 / centered.len() as f64 * 100.0
+        );
+    }
+    println!("チャンスレベル = 3/19 = 15.8%");
+    println!("コサインの幅が極小なら**指標が飽和**している。");
+    println!("中心化 (共通成分を引く) で識別率が上がるなら、情報は残っていたが");
+    println!("生のコサインでは共通成分に埋もれていた、ということ。");
+
     // --- Q と音程不変性の関係 ---
     //
     // 仮説: Q が鋭いほど**倍音が分解**され、応答が包絡でなく倍音を追う。
