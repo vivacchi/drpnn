@@ -244,7 +244,24 @@ impl ThermoNeuron {
             entropy_per_spike: 0,
             is_inhibitory: false,
             generates_entropy: false,
-            spontaneous_input: 2, // 検証中: 仮想 M0 等価性 (Step 0 結果の再解釈)
+            // 2026-08-26: 2 → **0** (受信専用トランスデューサ)。
+            //
+            // このフィールドは「検証中: 仮想 M0 等価性」のまま結論が出ずに放置され、
+            // さらに `ThermoNetwork::new` のガード
+            // `if n.spontaneous_input == 0 && n.leak == 0 { continue; }` が
+            // この値 (2, leak=1) に対して**常に偽**だったため素通りし、
+            // 入力ニューロンにも `idx % 4` が配られていた
+            // (= 設計書 §3.6 の決定でも §3.6.1 の復旧案でもない**第三の構成**)。
+            //
+            // 実測 (累計 6/6 で一律 0 が優勢):
+            //   N_BANDS=40: selectivity 0.699/0.747/0.712 → 0.865/0.838/0.847
+            //   N_BANDS=80: selectivity 0.400/0.312/0.426 → 0.771/0.773/0.798
+            // 現状では無音でも入力層の半数が最大 135 Hz で自走し、
+            // 完全無音 1 秒で M1 出力層が 616 spike 出ていた。
+            //
+            // 0 は :196 のドキュメントコメントとも、設計思想の
+            // 「階層責務分離: 信号生成 = M0、信号変換 = M1 input neuron」とも一致する。
+            spontaneous_input: 0,
             spontaneous_jitter: 0,
             jitter_state: 0xACE1,
             jitter_interval: 1,

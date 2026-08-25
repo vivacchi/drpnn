@@ -234,6 +234,9 @@ fn main() {
     }
     if input_spont >= 0 {
         net.set_input_spontaneous(input_spont);
+    } else if input_spont == -2 {
+        // 旧壊れ状態 (ガードが死んで idx%4 が配られていた) の再現
+        net.reproduce_broken_input_guard();
     }
     let mut cochlea = Cochlea::new();
     if legacy_biquad != 0 {

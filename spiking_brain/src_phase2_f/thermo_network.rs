@@ -346,6 +346,18 @@ impl ThermoNetwork {
         }
     }
 
+    /// **旧壊れ状態の再現用** (2026-08-26)。
+    ///
+    /// 2026-08-26 の修正前は、`ThermoNetwork::new` のガードが死んでいたため
+    /// 入力ニューロンにも `idx % 4` が配られていた。
+    /// 修正の効果を宣言どおりのゲート (旧より上がるか) で測るために、
+    /// その状態を再現できるようにしておく。**通常は呼ばない。**
+    pub fn reproduce_broken_input_guard(&mut self) {
+        for &i in self.input_neurons.iter() {
+            self.neurons[i].spontaneous_input = (i as i32) % 4;
+        }
+    }
+
     pub fn set_spontaneous_jitter(&mut self, amplitude: i32) {
         self.set_spontaneous_jitter_sparse(amplitude, 1, 1);
     }
@@ -489,6 +501,8 @@ impl ThermoNetwork {
             placed_internal_exc, config.n_excitatory - config.n_output);
 
         // ── Spontaneous activity の個体差を決定論的に割り当て ──
+        let input_ids: std::collections::HashSet<usize> =
+            input_neurons.iter().cloned().collect();
         // 各ニューロン (入力以外) に index 由来の spontaneous_input を設定
         // 生物の Na/K ポンプ密度差を整数で表現: 0..=3 の 4 段階個体差
         //   spontaneous=0: 完全 silent 候補 (leak で減衰のみ)
@@ -497,8 +511,12 @@ impl ThermoNetwork {
         //   spontaneous=3: 自発発火傾向 (+1/step → 80step で発火)
         // leak は全体で 2/step (細胞膜の自然リーク)
         for (idx, n) in neurons.iter_mut().enumerate() {
-            if n.spontaneous_input == 0 && n.leak == 0 {
-                // 入力ニューロンは個体差なし (パターン入力のみで動く)
+            // 入力ニューロンは個体差なし (パターン入力のみで動く)。
+            //
+            // 2026-08-26 修正: 旧条件は `spontaneous_input == 0 && leak == 0` で、
+            // `ThermoNeuron::input()` が `spontaneous_input: 2, leak: 1` に変わった時点で
+            // **常に偽になり死んでいた**。入力ニューロン**であること**で判定する。
+            if input_ids.contains(&idx) {
                 continue;
             }
             n.spontaneous_input = (idx as i32) % 4;
