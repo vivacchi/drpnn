@@ -142,6 +142,11 @@ path = "src_phase2_f/bin/consonant_probe.rs"
 name = "perturbation_probe"
 path = "src_phase2_f/bin/perturbation_probe.rs"
 
+# Phase 2 Fork F: F0 (音程) は表現されるか / 音程不変性
+[[bin]]
+name = "pitch_probe"
+path = "src_phase2_f/bin/pitch_probe.rs"
+
 # Phase 2 Fork F: 累積失聴 (M0.5 は繰り返し提示で聞こえなくなるか)
 [[bin]]
 name = "cumulative_deafness"

@@ -73,6 +73,9 @@ pub struct Vowel {
     pub label: char,
     pub formants_hz: [f64; 3],  // F1, F2, F3
     pub amplitudes: [i32; 3],   // 振幅 (生成時 i32 範囲)
+    /// フォルマント帯域幅 [Hz] (Klatt 1980 の標準値・2026-08-25 追加)。
+    /// `synth_vowel_f0` の全極共鳴器で使う。`synth_vowel` (純音3本) は使わない。
+    pub bandwidths_hz: [f64; 3],
 }
 
 /// 標準的な日本語 5 母音.
@@ -95,26 +98,31 @@ pub fn vowels() -> [Vowel; 5] {
             label: 'a',
             formants_hz: [800.0, 1300.0, 2700.0],
             amplitudes: [16000, 11200, 4800],
+            bandwidths_hz: [60.0, 90.0, 150.0],
         },
         Vowel {
             label: 'i',
             formants_hz: [300.0, 2300.0, 3000.0],
             amplitudes: [16000, 8000, 6400],
+            bandwidths_hz: [60.0, 90.0, 150.0],
         },
         Vowel {
             label: 'u',
             formants_hz: [350.0, 850.0, 2400.0],
             amplitudes: [16000, 12800, 3200],
+            bandwidths_hz: [60.0, 90.0, 150.0],
         },
         Vowel {
             label: 'e',
             formants_hz: [500.0, 2000.0, 2700.0],
             amplitudes: [16000, 9600, 4800],
+            bandwidths_hz: [60.0, 90.0, 150.0],
         },
         Vowel {
             label: 'o',
             formants_hz: [500.0, 900.0, 2400.0],
             amplitudes: [16000, 12800, 4800],
+            bandwidths_hz: [60.0, 90.0, 150.0],
         },
     ]
 }
@@ -155,6 +163,185 @@ pub fn synth_vowel(vowel: &Vowel, duration_ms: f64) -> Vec<i32> {
         out.push(sample);
     }
     out
+}
+
+// ──────────────────────────────────────────────────────────────
+// F0 (音程) つき母音合成 — 声帯パルス列 + 全極フォルマント共鳴器
+// ──────────────────────────────────────────────────────────────
+
+/// **全極 2 次共鳴器** (Klatt 型のフォルマント共鳴器・2026-08-25 追加)。
+///
+/// `cochlea::BandpassBiquad` は共鳴器として使えない (独立監査の指摘):
+///   - RBJ の bandpass は **0 dB peak gain 正規化**なので**一切増幅しない**
+///   - 2 極 2 零なので中心の下側スカートが -6dB/oct で落ちる (全極なら平坦)
+///   - `erb_q_factor` は Q 上限 9.264 で高域フォルマント帯域幅を表現できない
+///
+/// 伝達関数: `H(z) = G / (1 - a1 z^-1 - a2 z^-2)`、極は `r·e^(±jθ)`
+///   `r = exp(-π·BW/fs)` 、 `θ = 2π·F/fs`
+///   `a1 = 2r·cosθ` 、 `a2 = -r²`
+/// `G` は共鳴点のピーク応答が指定振幅になるよう初期化時に決める
+/// (設計時の f64 は初期化のみ — 原理 3 の明文化された例外)。
+///
+/// 状態は `cochlea::BandpassBiquad` と同じく **i64 の Q8** で保持する。
+/// 低周波・高 Q ほど 1 サンプルの寄与が小さく、整数丸めで削られるため
+/// (2026-08-25 に蝸牛側で実証した欠陥と同型)。
+#[derive(Clone, Debug)]
+pub struct FormantResonator {
+    /// Q1.15 係数
+    pub a1: i32,
+    pub a2: i32,
+    /// 入力利得 (Q1.15)
+    pub g: i32,
+    /// Q8 の高精度状態
+    pub y1: i64,
+    pub y2: i64,
+}
+
+/// 共鳴器の状態が持つ小数ビット数
+pub const RESONATOR_STATE_SHIFT: i32 = 8;
+
+impl FormantResonator {
+    /// `f_hz` に共鳴し、帯域幅 `bw_hz`、共鳴点のピーク利得が `peak_gain` になる共鳴器。
+    pub fn new(f_hz: f64, bw_hz: f64, peak_gain: f64, sample_rate: f64) -> Self {
+        let r = (-std::f64::consts::PI * bw_hz / sample_rate).exp();
+        let theta = 2.0 * std::f64::consts::PI * f_hz / sample_rate;
+        let a1 = 2.0 * r * theta.cos();
+        let a2 = -(r * r);
+        // 共鳴点 z = e^{jθ} での |H| を求めて G を逆算する
+        let (cw, sw) = (theta.cos(), theta.sin());
+        let (c2w, s2w) = ((2.0 * theta).cos(), (2.0 * theta).sin());
+        let re = 1.0 - a1 * cw - a2 * c2w;
+        let im = a1 * sw + a2 * s2w;
+        let mag = (re * re + im * im).sqrt();
+        let g = peak_gain * mag;
+        Self {
+            a1: (a1 * 32768.0).round() as i32,
+            a2: (a2 * 32768.0).round() as i32,
+            g: (g * 32768.0).round() as i32,
+            y1: 0,
+            y2: 0,
+        }
+    }
+
+    #[inline]
+    pub fn process(&mut self, x: i32) -> i32 {
+        let num: i64 = (self.g as i64) * (x as i64);
+        let acc: i64 = (num << RESONATOR_STATE_SHIFT)
+            + (self.a1 as i64) * self.y1
+            + (self.a2 as i64) * self.y2;
+        // ゼロ方向切り捨て (受動的損失でリミットサイクルを構造的に潰す)
+        let bias: i64 = if acc < 0 { 32767 } else { 0 };
+        let y0 = (acc + bias) >> 15;
+        self.y2 = self.y1;
+        self.y1 = y0;
+        let ob: i64 = if y0 < 0 { (1 << RESONATOR_STATE_SHIFT) - 1 } else { 0 };
+        ((y0 + ob) >> RESONATOR_STATE_SHIFT) as i32
+    }
+}
+
+/// 声帯パルス列の開放商 (パルス幅 / 周期)。Rosenberg モデルの標準値付近。
+pub const GLOTTAL_OPEN_QUOTIENT_PERCENT: usize = 40;
+
+/// 声帯パルス列を作る (決定論的・整数)。
+///
+/// 単純なインパルス列は全倍音が等振幅になるが、実際の声帯波は高域が落ちる。
+/// **パルスに幅を持たせることで傾斜を作る** (後から傾斜を掛けるのではない・監査の指摘)。
+/// 三角波パルス (立ち上がり→立ち下がり) は約 -12 dB/oct を与える。
+///
+/// F0 [Hz] から周期 = SAMPLE_RATE / F0 サンプル。整数周期なので折り返さない。
+pub fn glottal_pulse_train(f0_hz: f64, n_samples: usize, amplitude: i32) -> Vec<i32> {
+    let period = (SAMPLE_RATE_HZ / f0_hz).round() as usize;
+    let width = (period * GLOTTAL_OPEN_QUOTIENT_PERCENT / 100).max(2);
+    let rise = width / 2;
+    let mut out = Vec::with_capacity(n_samples);
+    for i in 0..n_samples {
+        let phase = i % period;
+        let v = if phase < rise {
+            // 立ち上がり
+            (amplitude as i64 * phase as i64 / rise.max(1) as i64) as i32
+        } else if phase < width {
+            // 立ち下がり
+            (amplitude as i64 * (width - phase) as i64 / (width - rise).max(1) as i64) as i32
+        } else {
+            0
+        };
+        out.push(v);
+    }
+    out
+}
+
+/// **F0 (音程) つきの母音合成**。
+///
+/// `synth_vowel` (純音 3 本) との違い:
+///   - 純音 3 本は「フォルマントの**包絡**」を直接鳴らしていた。倍音が無いので
+///     F0 という概念自体が存在せず、「低いあ」と「高いあ」を作れなかった。
+///   - こちらは**声帯パルス列を 3 つの全極共鳴器に通す**。
+///     倍音が F0 間隔で並び、共鳴器がその振幅を形づくる = 本物の音声と同じ構造。
+///     **音程を変えても包絡は動かない**ので、同じ母音として読めるはず。
+///
+/// `synth_vowel` は**変更しない** (過去ログとの比較の連続性)。
+pub fn synth_vowel_f0(vowel: &Vowel, f0_hz: f64, duration_ms: f64) -> Vec<i32> {
+    let n_samples = (duration_ms * SAMPLE_RATE_HZ / 1000.0) as usize;
+    // 声帯源。共鳴器のピーク利得で振幅を作るので、源は控えめにする。
+    let source = glottal_pulse_train(f0_hz, n_samples, 4096);
+    let mut resonators: Vec<FormantResonator> = (0..3)
+        .map(|k| {
+            FormantResonator::new(
+                vowel.formants_hz[k],
+                vowel.bandwidths_hz[k],
+                vowel.amplitudes[k] as f64 / 4096.0,
+                SAMPLE_RATE_HZ,
+            )
+        })
+        .collect();
+    let mut raw = Vec::with_capacity(n_samples);
+    for &x in source.iter() {
+        let mut sample = 0i32;
+        for r in resonators.iter_mut() {
+            sample = sample.saturating_add(r.process(x));
+        }
+        raw.push(sample);
+    }
+
+    // **RMS を `synth_vowel` (純音3本版) に揃える** (2026-08-25)。
+    //
+    // 声帯パルス列の倍音は F0 が高いほど本数が減り 1 本あたりが強くなるので、
+    // 源の振幅を固定すると**音量が F0 に依存する**。それでは音程不変性を測るとき
+    // 「音程の違い」でなく「音量の違い」を見てしまう。
+    // 既存の基準 (`synth_vowel`) と同じ RMS に揃えることで音量を交絡から外す。
+    // (蝸牛を駆動するのは包絡線 ≒ RMS であってピークではない — S1 で実証済み。)
+    let reference = synth_vowel(vowel, duration_ms);
+    let target_rms = rms_i64(&reference);
+    let cur_rms = rms_i64(&raw);
+    if cur_rms > 0 && target_rms > 0 {
+        for v in raw.iter_mut() {
+            *v = ((*v as i64) * target_rms / cur_rms) as i32;
+        }
+    }
+
+    // attack/release (既存 synth_vowel と同じ形)
+    let ramp = ((10.0 * SAMPLE_RATE_HZ / 1000.0) as usize).min(n_samples / 4).max(1);
+    let mut out = Vec::with_capacity(n_samples);
+    for (i, &sample) in raw.iter().enumerate() {
+        let env = if i < ramp {
+            (i * 1024 / ramp) as i32
+        } else if i + ramp >= n_samples {
+            (((n_samples - i) * 1024) / ramp) as i32
+        } else {
+            1024
+        };
+        out.push(((sample as i64 * env as i64) >> 10) as i32);
+    }
+    out
+}
+
+/// 整数 RMS (決定論的)
+fn rms_i64(w: &[i32]) -> i64 {
+    if w.is_empty() {
+        return 0;
+    }
+    let sq: i64 = w.iter().map(|&v| (v as i64) * (v as i64)).sum();
+    isqrt_i64(sq / w.len() as i64)
 }
 
 // ──────────────────────────────────────────────────────────────
