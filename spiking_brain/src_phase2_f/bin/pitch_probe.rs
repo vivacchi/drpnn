@@ -247,7 +247,7 @@ fn main() {
     println!();
     println!("--- G55 母音の識別 (飽和しない指標) ---");
     println!(" Q   識別率  コサインの幅(別母音)  中心化コサインでの識別率");
-    for &q in [1.0f64, 2.0, 3.0, 4.0, 6.0].iter() {
+    for &q in [0.35f64, 0.5, 1.0, 2.0, 3.0, 4.0, 6.0].iter() {
         let mut conds: Vec<(usize, [u32; N_BANDS])> = Vec::new();
         for (k, v) in vs.iter().enumerate() {
             for &f0 in F0S.iter() {
@@ -338,7 +338,7 @@ fn main() {
     println!();
     println!("--- Q と音程不変性の関係 ---");
     println!(" Q   同一母音F0違いの最小  別母音同F0の最大  G54  無音条件");
-    for &q in [1.0f64, 2.0, 3.0, 4.0, 6.0].iter() {
+    for &q in [0.35f64, 0.5, 1.0, 2.0, 3.0, 4.0, 6.0].iter() {
         let mut profs: Vec<Vec<[u32; N_BANDS]>> = Vec::new();
         let mut silent = 0usize;
         for v in vs.iter() {
