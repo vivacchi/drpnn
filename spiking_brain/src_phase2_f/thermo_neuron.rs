@@ -65,6 +65,29 @@ pub struct ThermoNeuron {
     /// 毎 step の自発入力 (個体差で決定論的に固定)。生物の Na/K ポンプ密度差に相当。
     /// 0 なら自発発火なし、大きいほど自発発火しやすい。
     pub spontaneous_input: i32,
+    /// 背景活動ノイズの振幅 (**0 = 無効**・2026-08-25 追加)。
+    ///
+    /// `spontaneous_input` は**定数**駆動なので各ニューロンは規則的に発火する
+    /// = メトロノームであってノイズではない。`idx % 4` はニューロン**間**の
+    /// 個体差にすぎず、時間方向の不規則さを与えない。
+    ///
+    /// ここで加えるのは**時間方向の不規則さ**——大脳皮質の自発活動 (背景ノイズ) に対応し、
+    /// JEPA でノイズが果たす役割 (崩壊の防止・対称性の破壊) と同じ位置にある。
+    /// 膜電位への駆動なので閾値装置と違い**グラデーションが作れる**
+    /// (蝸牛の FireGenerator は閾値+不応期なので 0Hz か 400Hz しか出せないと実測で判明・S9)。
+    ///
+    /// 原理 3「乱数を使わない (初期化時を除く)」を満たすため乱数ではなく LFSR を使う。
+    pub spontaneous_jitter: i32,
+    /// 背景ノイズの LFSR 状態 (ニューロン index 由来で決定論的に初期化)
+    pub jitter_state: u16,
+    /// 背景ノイズを入れる間隔 [step] (1 = 毎 step・既定)。
+    ///
+    /// 実測 (S11) で「1 step・1 ニューロン・+1 の摂動では指紋がバイト単位で不変」
+    /// = M1 は単発の摂動に完全に頑健、と判明した。一方 ±1 を毎 step 全ニューロンに
+    /// 入れると再現性が 0.966 → 0.373 に崩壊する。壊しているのは**累積**なので、
+    /// 注入頻度を落とせる軸を用意する。`current_time % interval` で判定するので
+    /// 追加の状態を持たない (決定論性を保つ)。
+    pub jitter_interval: i32,
     /// 毎 step の膜電位漏れ (リーク電流)。生物の細胞膜漏電に相当。
     pub leak: i32,
 
@@ -114,6 +137,9 @@ impl ThermoNeuron {
             is_inhibitory: false,
             generates_entropy: true,
             spontaneous_input: 2, // デフォルト中央値、後で個体差で上書き
+            spontaneous_jitter: 0,
+            jitter_state: 0xACE1,
+            jitter_interval: 1,
             leak: 2,
             // UP/DOWN デフォルト OFF (up_offset=0 で既存動作と互換、ThermoNetwork で設定)
             up_state: false,
@@ -144,6 +170,9 @@ impl ThermoNeuron {
             is_inhibitory: true,
             generates_entropy: true,
             spontaneous_input: 2,
+            spontaneous_jitter: 0,
+            jitter_state: 0xACE1,
+            jitter_interval: 1,
             leak: 2,
             // UP/DOWN デフォルト OFF
             up_state: false,
@@ -186,6 +215,9 @@ impl ThermoNeuron {
             is_inhibitory: false,
             generates_entropy: false,
             spontaneous_input: 2, // 検証中: 仮想 M0 等価性 (Step 0 結果の再解釈)
+            spontaneous_jitter: 0,
+            jitter_state: 0xACE1,
+            jitter_interval: 1,
             leak: 1,              // 過剰発火防止
             // UP/DOWN デフォルト OFF
             up_state: false,
@@ -196,6 +228,19 @@ impl ThermoNeuron {
             position,
             spike_trace_init: 160,
         }
+    }
+
+    /// 背景活動ノイズを 1 個生成 (-jitter..+jitter・決定論的 LFSR)。
+    #[inline]
+    pub fn next_jitter(&mut self) -> i32 {
+        let bit = ((self.jitter_state >> 0)
+            ^ (self.jitter_state >> 2)
+            ^ (self.jitter_state >> 3)
+            ^ (self.jitter_state >> 5))
+            & 1;
+        self.jitter_state = (self.jitter_state >> 1) | (bit << 15);
+        let span = (2 * self.spontaneous_jitter + 1) as u16;
+        ((self.jitter_state % span) as i32) - self.spontaneous_jitter
     }
 
     /// 1 クロックの物理プロセス。戻り値: 発火したか
@@ -227,6 +272,13 @@ impl ThermoNeuron {
         //     - UP 状態時の膜電位オフセット (脱分極相当)
         self.membrane = self.membrane.saturating_add(input_current);
         self.membrane = self.membrane.saturating_add(self.spontaneous_input);
+        // 背景活動ノイズ (時間方向の不規則さ)。0 のとき従来とバイト同一。
+        if self.spontaneous_jitter > 0
+            && (self.jitter_interval <= 1 || current_time % self.jitter_interval == 0)
+        {
+            let j = self.next_jitter();
+            self.membrane = self.membrane.saturating_add(j);
+        }
         if self.up_state {
             self.membrane = self.membrane.saturating_add(self.up_offset);
         }
@@ -286,6 +338,54 @@ impl ThermoNeuron {
 
 #[cfg(test)]
 mod tests {
+    // ── 背景活動ノイズ (2026-08-25) ──
+
+    /// 既定は無効で、有効時と挙動が違うこと (バイト同一性 + 経路が生きていること)。
+    #[test]
+    fn spontaneous_jitter_defaults_off() {
+        let n = super::ThermoNeuron::excitatory((0, 0));
+        assert_eq!(n.spontaneous_jitter, 0, "背景ノイズの既定は 0");
+
+        let mut off = super::ThermoNeuron::excitatory((0, 0));
+        let mut on = super::ThermoNeuron::excitatory((0, 0));
+        on.spontaneous_jitter = 3;
+        let (mut a, mut b) = (Vec::new(), Vec::new());
+        for t in 0..500 {
+            a.push(off.update(1, t));
+            b.push(on.update(1, t));
+        }
+        assert_ne!(a, b, "背景ノイズを入れても発火列が変わらない = 経路が死んでいる");
+    }
+
+    /// 決定論的であること (原理 3: 乱数を使わない)。
+    #[test]
+    fn spontaneous_jitter_is_deterministic() {
+        let run = || {
+            let mut n = super::ThermoNeuron::excitatory((0, 0));
+            n.spontaneous_jitter = 3;
+            (0..1000).map(|t| n.update(1, t)).collect::<Vec<bool>>()
+        };
+        assert_eq!(run(), run(), "同じ条件で違う発火列が出た");
+    }
+
+    /// ノイズ値が宣言した範囲 -A..+A に収まること。
+    #[test]
+    fn spontaneous_jitter_stays_in_range() {
+        for amp in [1i32, 2, 3, 4, 8] {
+            let mut n = super::ThermoNeuron::excitatory((0, 0));
+            n.spontaneous_jitter = amp;
+            let (mut lo, mut hi) = (i32::MAX, i32::MIN);
+            for _ in 0..5000 {
+                let j = n.next_jitter();
+                lo = lo.min(j);
+                hi = hi.max(j);
+            }
+            assert!(lo >= -amp && hi <= amp, "振幅 {} で範囲外 [{}, {}]", amp, lo, hi);
+            // 両側に振れること (片側に偏っていたら「ノイズ」でなくバイアス)
+            assert!(lo < 0 && hi > 0, "振幅 {} で片側にしか振れない [{}, {}]", amp, lo, hi);
+        }
+    }
+
     use super::*;
 
     #[test]

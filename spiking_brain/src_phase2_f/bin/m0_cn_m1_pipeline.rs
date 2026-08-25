@@ -182,6 +182,9 @@ fn main() {
     let legacy_biquad: i32 = std::env::args().nth(6).and_then(|s| s.parse().ok()).unwrap_or(0);
     // CLI 第 7 引数: 訓練順序のシード (42 標準 = 従来と完全同一)。分散を測るため。
     let train_seed: u64 = std::env::args().nth(7).and_then(|s| s.parse().ok()).unwrap_or(42);
+    // CLI 第 8 引数: 背景活動ノイズの振幅 (0 標準 = 従来と完全同一)。
+    // spontaneous_input の定数駆動 (メトロノーム) に、時間方向の不規則さを足す。
+    let jitter: i32 = std::env::args().nth(8).and_then(|s| s.parse().ok()).unwrap_or(0);
     let n_sample = 20;
     let snap_interval = if n_train >= 500 { 500 } else { (n_train / 10).max(10) };
 
@@ -194,6 +197,8 @@ fn main() {
     println!("  ★ 提示ゲイン: {}x / 子音合成: {} / biquad: {}", input_gain,
         if banded != 0 { "帯域つき (banded)" } else { "従来 (帯域指定を無視)" },
         if legacy_biquad != 0 { "旧 算術シフト (24帯域が自己発振)" } else { "既定 ゼロ方向切り捨て (自己発振なし)" });
+    println!("  ★ 背景活動ノイズ: 振幅 {} ({})", jitter,
+        if jitter > 0 { "時間方向の不規則さあり" } else { "なし = 従来" });
 
     let mut cfg = ThermoNetworkConfig::for_m1_cn_40();
     if decay_slow > 1 {
@@ -203,6 +208,12 @@ fn main() {
             decay_slow, cfg.conductance_decay_interval, cfg.vitality_decay_interval);
     }
     let mut net = ThermoNetwork::new(cfg);
+    // CLI 第 9/10 引数: 背景ノイズの疎さ (間隔 step / 対象割合 idx%F==0)。既定 1,1 = 密
+    let jitter_interval: i32 = std::env::args().nth(9).and_then(|s| s.parse().ok()).unwrap_or(1);
+    let jitter_fraction: usize = std::env::args().nth(10).and_then(|s| s.parse().ok()).unwrap_or(1);
+    if jitter > 0 {
+        net.set_spontaneous_jitter_sparse(jitter, jitter_interval, jitter_fraction);
+    }
     let mut cochlea = Cochlea::new();
     if legacy_biquad != 0 {
         for b in cochlea.bands.iter_mut() {

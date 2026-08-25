@@ -67,7 +67,7 @@ fn cochlea_with_fmax(f_max: f64) -> Cochlea {
     let fire_gens = (0..N_BANDS)
         .map(|_| FireGenerator::new(FIRE_THRESHOLD, FIRE_REFRACTORY_STEPS))
         .collect();
-    Cochlea { bands, envelopes, fire_gens, center_freqs }
+    Cochlea { bands, envelopes, fire_gens, center_freqs, ..Cochlea::new() }
 }
 
 /// 波形にゲインをかけて蝸牛に通し、帯域ごとのスパイク数を返す。

@@ -324,6 +324,41 @@ pub const FIRE_REFRACTORY_STEPS: i32 = 4;
 /// 包絡線検出器の leak_shift (4 = 約 1ms 時定数)
 pub const ENV_LEAK_SHIFT: i32 = 4;
 
+/// 聴神経 spontaneous rate 用の 16-bit LFSR (決定論的擬似ノイズ)。
+///
+/// 原理 3「確率や乱数を使わない (初期化時を除く)」を満たすため、
+/// 乱数ではなく LFSR を使う。同じ種から必ず同じ列が出る。
+/// `phoneme_synth::LfsrNoise` と同じタップだが、**M0 は自己完結させる**
+/// (刺激生成器に依存させない = DRP 実装との整合)。
+#[derive(Clone, Debug)]
+pub struct SpontaneousLfsr {
+    pub state: u16,
+}
+
+impl SpontaneousLfsr {
+    pub fn new(seed: u16) -> Self {
+        Self { state: if seed == 0 { 0xACE1 } else { seed } }
+    }
+
+    /// -128..127 程度の小振幅ノイズ。
+    #[inline]
+    pub fn next(&mut self) -> i32 {
+        let bit = ((self.state >> 0) ^ (self.state >> 2) ^ (self.state >> 3) ^ (self.state >> 5)) & 1;
+        self.state = (self.state >> 1) | (bit << 15);
+        ((self.state & 0xFF) as i32) - 128
+    }
+}
+
+/// 自発発火の帯域間個体差の段数 (M1 の `idx % 4` と同じ idiom)。
+///
+/// 生物対応: 聴神経線維の spontaneous rate は個体差が大きい
+/// (high-SR / medium-SR / low-SR fiber)。帯域ごとに決定論的に割り当てる。
+pub const SPONTANEOUS_INDIVIDUALITY: usize = 4;
+
+/// 設計が指定する自発発火率の範囲 [Hz] (M0_COCHLEA_DESIGN.md §3.6)。
+/// **この値は設計側にある正解であって、こちらで決めた閾値ではない。**
+pub const SPONTANEOUS_RATE_TARGET_HZ: (f64, f64) = (50.0, 100.0);
+
 #[derive(Clone, Debug)]
 pub struct Cochlea {
     pub bands: Vec<BandpassBiquad>,
@@ -331,6 +366,19 @@ pub struct Cochlea {
     pub fire_gens: Vec<FireGenerator>,
     /// 各帯域の中心周波数 (デバッグ・可視化用)
     pub center_freqs: Vec<f64>,
+    /// 自発発火の駆動振幅 (**0 = 無効**)。
+    ///
+    /// `M0_COCHLEA_DESIGN.md` §3.6 で「M0 蝸牛が聴神経 spontaneous rate を含む
+    /// スパイク列を生成する」と 2026-05-24 に確定しながら、
+    /// `// cochlea.rs (Step 3 で実装)` のまま未実装だったもの (2026-08-25 実装)。
+    ///
+    /// 注入点は**包絡線検出器の入力** (biquad の後)。生物で spontaneous rate が
+    /// 生じるのは内有毛細胞→聴神経シナプスであり、**機械的フィルタリングの下流**だから。
+    /// 帯域ごとに独立な LFSR を使う (相関ノイズだと広帯域オンセットに見え、
+    /// M0.5 の Octopus 細胞が偽発火する)。
+    pub spontaneous_amplitude: i32,
+    /// 帯域ごとの独立な決定論的ノイズ源
+    pub spontaneous: Vec<SpontaneousLfsr>,
 }
 
 impl Cochlea {
@@ -346,7 +394,18 @@ impl Cochlea {
         let fire_gens: Vec<FireGenerator> = (0..N_BANDS)
             .map(|_| FireGenerator::new(FIRE_THRESHOLD, FIRE_REFRACTORY_STEPS))
             .collect();
-        Self { bands, envelopes, fire_gens, center_freqs }
+        // 帯域ごとに異なる種 (決定論的・index 由来)
+        let spontaneous = (0..N_BANDS)
+            .map(|ch| SpontaneousLfsr::new((0xACE1u16).wrapping_add((ch as u16).wrapping_mul(2654))))
+            .collect();
+        Self {
+            bands,
+            envelopes,
+            fire_gens,
+            center_freqs,
+            spontaneous_amplitude: 0, // 既定 OFF
+            spontaneous,
+        }
     }
 
     /// 1 step (= SAMPLES_PER_STEP サンプル) 処理.
@@ -359,7 +418,15 @@ impl Cochlea {
         for &x in samples {
             for ch in 0..N_BANDS {
                 let bp_out = self.bands[ch].process(x);
-                let _env = self.envelopes[ch].process(bp_out);
+                // 聴神経 spontaneous rate: 帯域ごとの独立な決定論的ノイズを
+                // 包絡線検出器の入力に足す (0 のとき従来とバイト同一)。
+                let drive = if self.spontaneous_amplitude > 0 {
+                    let indiv = 1 + (ch % SPONTANEOUS_INDIVIDUALITY) as i32;
+                    bp_out + self.spontaneous[ch].next() * self.spontaneous_amplitude * indiv
+                } else {
+                    bp_out
+                };
+                let _env = self.envelopes[ch].process(drive);
             }
         }
         // (b) step の最後で各帯域の包絡線を圧縮して閾値判定
@@ -379,6 +446,10 @@ impl Cochlea {
         for b in &mut self.bands { b.reset(); }
         for e in &mut self.envelopes { e.reset(); }
         for f in &mut self.fire_gens { f.reset(); }
+        // 自発ノイズ源も同じ種に戻す (決定論性: 同じ条件で必ず同じ列)
+        for (ch, s) in self.spontaneous.iter_mut().enumerate() {
+            *s = SpontaneousLfsr::new((0xACE1u16).wrapping_add((ch as u16).wrapping_mul(2654)));
+        }
     }
 }
 

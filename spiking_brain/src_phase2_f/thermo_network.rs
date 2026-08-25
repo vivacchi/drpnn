@@ -277,6 +277,32 @@ pub struct ThermoNetwork {
 }
 
 impl ThermoNetwork {
+    /// 背景活動ノイズの振幅を全ニューロンに設定する (0 = 無効・既定)。
+    ///
+    /// `spontaneous_input` の定数駆動 (メトロノーム) に対し、これは
+    /// **時間方向の不規則さ**を与える。大脳皮質の自発活動に対応し、
+    /// JEPA でノイズが果たす役割 (崩壊の防止) と同じ位置にある。
+    /// LFSR の種はネットワーク構築時に index 由来で配ってあるので、
+    /// ニューロンごとに異なる列が出る (同期しない)。
+    pub fn set_spontaneous_jitter(&mut self, amplitude: i32) {
+        self.set_spontaneous_jitter_sparse(amplitude, 1, 1);
+    }
+
+    /// 背景ノイズを**疎に**入れる。
+    ///
+    /// - `interval`: 何 step に 1 回入れるか (1 = 毎 step)
+    /// - `fraction`: `idx % fraction == 0` のニューロンにだけ入れる (1 = 全部)
+    ///
+    /// 単発の摂動には M1 が完全に頑健と実測されたので (S11)、
+    /// 壊しているのは累積量である。この 2 軸でその量を下げられる。
+    pub fn set_spontaneous_jitter_sparse(&mut self, amplitude: i32, interval: i32, fraction: usize) {
+        let f = fraction.max(1);
+        for (idx, n) in self.neurons.iter_mut().enumerate() {
+            n.spontaneous_jitter = if idx % f == 0 { amplitude } else { 0 };
+            n.jitter_interval = interval.max(1);
+        }
+    }
+
     pub fn new(config: ThermoNetworkConfig) -> Self {
         let mut rng = StdRng::seed_from_u64(config.seed);
 
@@ -415,6 +441,17 @@ impl ThermoNetwork {
             }
             n.spontaneous_input = (idx as i32) % 4;
             // leak は excitatory()/inhibitory() で既に 2 設定済み
+        }
+
+        // ── 背景活動ノイズの LFSR 種を index 由来で決定論的に割り当て ──
+        // 種だけ配る (振幅 spontaneous_jitter は既定 0 = 無効)。
+        // 種が全ニューロンで同じだと背景ノイズが同期してしまい、
+        // 「ノイズ」でなく全体一斉の揺さぶりになるため index でずらす。
+        for (idx, n) in neurons.iter_mut().enumerate() {
+            n.jitter_state = (0xACE1u16).wrapping_add((idx as u16).wrapping_mul(2654));
+            if n.jitter_state == 0 {
+                n.jitter_state = 0xACE1;
+            }
         }
 
         // ── UP/DOWN 状態の有効化 (PAPER §5.12.7-A) ──

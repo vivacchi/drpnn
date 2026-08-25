@@ -137,6 +137,21 @@ path = "src_phase2_f/bin/m1_hash_probe.rs"
 name = "consonant_probe"
 path = "src_phase2_f/bin/consonant_probe.rs"
 
+# Phase 2 Fork F: M1 の摂動感度 — カオス性の検査 (S11)
+[[bin]]
+name = "perturbation_probe"
+path = "src_phase2_f/bin/perturbation_probe.rs"
+
+# Phase 2 Fork F: 背景活動ノイズの診断 (S10)
+[[bin]]
+name = "jitter_probe"
+path = "src_phase2_f/bin/jitter_probe.rs"
+
+# Phase 2 Fork F: M0 自発発火 (聴神経 spontaneous rate) 検証 (S9)
+[[bin]]
+name = "spontaneous_probe"
+path = "src_phase2_f/bin/spontaneous_probe.rs"
+
 # Phase 2 Fork F: 蝸牛 整数 biquad の自己発振検査 (S6)
 [[bin]]
 name = "biquad_limit_cycle"
