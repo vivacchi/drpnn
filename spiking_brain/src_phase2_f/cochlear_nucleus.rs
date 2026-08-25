@@ -23,6 +23,19 @@ pub const N_BUSHY: usize = N_BANDS;
 pub const N_STELLATE: usize = N_BANDS;
 /// 蝸牛神経核の総出力チャネル数
 pub const N_CN_OUTPUT: usize = N_OCTOPUS + N_BUSHY + N_STELLATE;  // 4 + N_BANDS + N_BANDS
+/// Bushy 細胞の**側方抑制**の強さ [%] (**0 = 無効**・2026-08-26 追加)。
+///
+/// 隣の帯域 (±1) の入力を、この割合だけ差し引く。
+/// スペクトルの山谷を際立たせる (コントラスト強調)。
+///
+/// **設計書には無い新規の機構**。設計書 §(Bushy) の「抑制」は
+/// **時間方向の適応**(持続を抑えて立ち上がりを強調)であって、
+/// 周波数方向の側方抑制ではない。
+///
+/// 6 原理には触れない: 隣からの抑制は局所的(原理1)、抑制性シナプスは物理プロセス(原理2)、
+/// 整数・決定論的(原理3/4)。AGC の「全帯域の平均で割る」とは性質が違う。
+pub const LATERAL_INHIBITION_PERCENT: i32 = 0;
+
 /// 各 Octopus の同時発火閾値 (帯域数)。
 ///
 /// **帯域数に比例させる** (2026-08-25 修正)。旧実装は `[3, 5, 8, 12]` の
@@ -115,6 +128,8 @@ pub struct CochlearNucleus {
     /// Stellate 細胞 (各帯域 隣接プール スペクトル包絡 rate)
     pub stellate: Vec<ThermoNeuron>,
     pub current_time: i32,
+    /// 側方抑制の強さ [%] (既定は `LATERAL_INHIBITION_PERCENT`)
+    pub lateral_inhibition_percent: i32,
 }
 
 impl CochlearNucleus {
@@ -124,7 +139,13 @@ impl CochlearNucleus {
             .collect();
         let bushy: Vec<ThermoNeuron> = (0..N_BUSHY).map(|_| make_bushy()).collect();
         let stellate: Vec<ThermoNeuron> = (0..N_STELLATE).map(|_| make_stellate()).collect();
-        Self { octopus, bushy, stellate, current_time: 0 }
+        Self {
+            octopus,
+            bushy,
+            stellate,
+            current_time: 0,
+            lateral_inhibition_percent: LATERAL_INHIBITION_PERCENT,
+        }
     }
 
     /// 1 step 処理 (3 ストリーム)
@@ -143,9 +164,32 @@ impl CochlearNucleus {
             }
         }
 
-        // (2) Bushy: 各帯域を 1:1 中継 (立ち上がり強調)
+        // (2) Bushy: 各帯域を 1:1 中継 (立ち上がり強調) + **側方抑制**
+        //
+        // 側方抑制は隣の帯域からの抑制性入力で、スペクトルの山谷を際立たせる
+        // (2026-08-26 追加・既定 0 = 従来とバイト同一)。
+        //
+        // **なぜ足したか**: 倍音つき刺激で母音の識別率が 35% で頭打ちになり、
+        // (N_BANDS, Q, 閾値) のどの組み合わせでも動かなかった (`m0_design_v2`)。
+        // 原因は「母音はどれも同じ帯域群にエネルギーが広がり、違うのは重みだけ」で、
+        // **共通成分が支配して母音の差がその上の小さな摂動になる**こと。
+        // 側方抑制は共通成分を局所的に差し引くので、この形に真正面から効く。
+        //
+        // **設計書には無い新規の機構**であることを明記する
+        // (自発発火・phase locking・対数圧縮・OHC 選択性は「設計されたが未実装」だったが、
+        //  これは違う)。ただし 6 原理には触れない —
+        // 隣の帯域からの抑制は**局所的**(原理1)で、抑制性シナプスという**物理プロセス**
+        // (原理2)、整数・決定論的(原理3/4)。
+        // AGC の「全帯域の平均で割る」とは性質が違う。
         for ch in 0..N_BUSHY {
-            if self.bushy[ch].update(cochlea_out[ch], t) {
+            let drive = if self.lateral_inhibition_percent > 0 {
+                let lo = if ch > 0 { cochlea_out[ch - 1] } else { 0 };
+                let hi = if ch + 1 < N_BANDS { cochlea_out[ch + 1] } else { 0 };
+                cochlea_out[ch] - (lo + hi) * self.lateral_inhibition_percent / 100
+            } else {
+                cochlea_out[ch]
+            };
+            if self.bushy[ch].update(drive, t) {
                 out[N_OCTOPUS + ch] = FIRE_CURRENT;
             }
         }

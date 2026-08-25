@@ -162,6 +162,11 @@ path = "src_phase2_f/bin/rate_code.rs"
 name = "level_axis"
 path = "src_phase2_f/bin/level_axis.rs"
 
+# Phase 2 Fork F: 側方抑制は母音の識別を上げるか
+[[bin]]
+name = "lateral_inhibition"
+path = "src_phase2_f/bin/lateral_inhibition.rs"
+
 # Phase 2 Fork F: M0 の設計点を倍音つき刺激で取り直す (v2)
 [[bin]]
 name = "m0_design_v2"

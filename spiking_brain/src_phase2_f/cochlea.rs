@@ -365,18 +365,15 @@ impl FireGenerator {
 ///     [BandpassBiquad × 20] → [EnvelopeDetector × 20]
 ///   8 サンプル (1 step) ごと:
 ///     [圧縮 + 閾値発火] → input current[20] を生成
-pub const N_BANDS: usize = 80;
-// 履歴: 20 → 40 (ki/se 分化改善 Step 1) → **80** (2026-08-25 フォルマント認識)
+pub const N_BANDS: usize = 40;
+// 履歴: 20 → 40 (ki/se 分化改善) → 80 (2026-08-25 純音刺激で最適化) → **40 に戻す**
 //
-// 80 にした根拠 (`m0_design` の全面掃引・母音と子音の両方にゲートを掛けた結果):
-//   帯域数  母音精度  子音被覆   (すべて 被覆15/15・場所符号10/10・穴0・非減衰0 の上で)
-//     40      52.6%    100.0%
-//     60      72.0%    100.0%
-//   **80      92.5%     91.6%**  ← 膝。40→80 で母音精度が +40 ポイント跳ねる
-//    120      90.4%     92.7%
-//    160     100.0%     71.1%    ← 母音は満点だが子音被覆を 20 ポイント失う
-//
-// 40 のままでは母音精度の上限が 52.6%。80 で本来の仕事 (フォルマントの区別) が立つ。
+// 2026-08-26: F0 を実装して**倍音つき刺激**で取り直したところ (`m0_design_v2`)、
+// 母音の識別率は N_BANDS 40 / 80 / 120 でどれも 30-35% で**帯域数が効かない**。
+// 純音刺激では 40→80 で母音精度が +40 ポイント跳ねたが、**その刺激が誤りだった**
+// (純音 3 本には倍音が無く、場所符号がフォルマントそのものになっていた)。
+// 実音声では帯域数が効かないので、M1 の入力を軽くする 40 に戻す。
+
 pub const SAMPLE_RATE_HZ: f64 = 16000.0;
 pub const SAMPLES_PER_STEP: usize = 8;  // DT_MS=0.5ms × 16kHz = 8
 pub const F_MIN_HZ: f64 = 50.0;
@@ -409,7 +406,16 @@ pub const STATE_SHIFT: i32 = 8;
 ///   (a) 穴の検査音の振幅が刺激スケールに追随していなかった
 ///   (b) biquad の状態が Q15 で、低周波・高 Q ほど量子化損失が大きかった
 /// (b) を `STATE_SHIFT` で直したら穴は幾何の問題に戻り、帯域数で買えるようになった。
-pub const Q_SHARPENING: f64 = 6.0;
+pub const Q_SHARPENING: f64 = 0.5;
+// 2026-08-26: 6.0 → **0.5** (1/12)。
+//
+// 6.0 は**純音 3 本の刺激**で最適化した値で、実音声には有害だった。
+// 倍音つき刺激での実測 (`m0_design_v2`・母音の識別率・チャンス 15.8%):
+//   Q ×0.1  30%  /  ×0.2  35%  /  ×0.35 35%  /  **×0.5  35%**  /  ×1.0  30%  /  ×6.0  5%
+// **高い Q は倍音を 1 本ずつ分解する**ので、場所符号が「倍音の位置」
+// (同じ F0 なら全母音で同じ) を追ってしまい、フォルマント包絡を読めない。
+// 低い Q は倍音をまたいで平滑するので包絡を追える
+// (本物の蝸牛の resolved / unresolved harmonics と同じ話)。
 /// パルス幅 (M1 input への electric current 値). M1 の INPUT_CURRENT=60 と整合.
 pub const FIRE_CURRENT: i32 = 60;
 /// 不応期 (step 単位). 連続音でも発火が頭打ちになる.
@@ -609,14 +615,15 @@ mod tests {
     ///   N=40・ERB Q・Q15 状態                     24 本
     ///   N=40・Q ×3・Q15 状態                       20 本
     ///   N=40・Q ×3・高精度状態                     25 本
-    ///   N=80・Q ×6・高精度状態 (現行)              45 本
+    ///   N=80・Q ×6・高精度状態                     45 本
+    ///   N=40・Q ×0.5・高精度状態 (現行)            21 本
     /// 高精度化で増えるのは、細かい振幅の振動が丸めで消えなくなるため。
     /// **どの構成でもゼロではない**ことがこのテストの主張。
     #[test]
     fn default_shift_produces_limit_cycles() {
         let n = limit_cycling_bands(false);
         assert!(n > 0, "旧既定の acc>>15 で自己発振が 1 本も起きない — バグの記録が失効した");
-        assert_eq!(n, 45,
+        assert_eq!(n, 21,
             "自己発振する帯域数が変わった (N_BANDS={} / Q_SHARPENING={} / STATE_SHIFT={} 前提)",
             N_BANDS, Q_SHARPENING, STATE_SHIFT);
     }
@@ -1043,8 +1050,11 @@ mod tests {
         let best_count = fire_counts[best_ch];
 
         // 隣接以外の遠い帯域の発火は best より大幅に少ない
-        let far_ch_low = 0;   // 50 Hz
-        let far_ch_high = 19; // 4000 Hz
+        // 2026-08-26 修正: far_ch_high は 19 をハードコードしていたが、
+        // N_BANDS 20→40 の拡張以降「4000Hz のつもりで実際は 820Hz」になっており、
+        // 1000Hz の隣に近すぎた (独立監査が予告していた陳腐化)。定数に追従させる。
+        let far_ch_low = 0;              // F_MIN_HZ 付近
+        let far_ch_high = N_BANDS - 1;   // F_MAX_HZ 付近
         assert!(best_count > fire_counts[far_ch_low] * 3,
             "near 1000Hz ch{} ({:.0}Hz) fires {}, far low ch{} ({:.0}Hz) fires {}",
             best_ch, c.center_freqs[best_ch], best_count,
