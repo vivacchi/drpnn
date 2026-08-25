@@ -142,6 +142,11 @@ path = "src_phase2_f/bin/consonant_probe.rs"
 name = "perturbation_probe"
 path = "src_phase2_f/bin/perturbation_probe.rs"
 
+# Phase 2 Fork F: 累積失聴 (M0.5 は繰り返し提示で聞こえなくなるか)
+[[bin]]
+name = "cumulative_deafness"
+path = "src_phase2_f/bin/cumulative_deafness.rs"
+
 # Phase 2 Fork F: 出力段の rate code (漏れ積分発火)
 [[bin]]
 name = "rate_code"
