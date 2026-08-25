@@ -142,6 +142,21 @@ path = "src_phase2_f/bin/consonant_probe.rs"
 name = "perturbation_probe"
 path = "src_phase2_f/bin/perturbation_probe.rs"
 
+# Phase 2 Fork F: 帯域数と選択性の幾何
+[[bin]]
+name = "band_coverage"
+path = "src_phase2_f/bin/band_coverage.rs"
+
+# Phase 2 Fork F: 子音は同じゲートを通るか
+[[bin]]
+name = "consonant_gate"
+path = "src_phase2_f/bin/consonant_gate.rs"
+
+# Phase 2 Fork F: M0 はフォルマントを区別できるか
+[[bin]]
+name = "formant_probe"
+path = "src_phase2_f/bin/formant_probe.rs"
+
 # Phase 2 Fork F: 背景活動ノイズの診断 (S10)
 [[bin]]
 name = "jitter_probe"

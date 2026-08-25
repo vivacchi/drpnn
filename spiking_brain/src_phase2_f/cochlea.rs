@@ -51,9 +51,20 @@ pub struct BandpassBiquad {
     /// 過去の入力 x[n-1], x[n-2]
     pub x1: i32,
     pub x2: i32,
-    /// 過去の出力 y[n-1], y[n-2]
-    pub y1: i32,
-    pub y2: i32,
+    /// 過去の出力 y[n-1], y[n-2]。**Q{STATE_SHIFT} の高精度表現** (2026-08-25)。
+    ///
+    /// 旧実装は毎サンプル整数に丸めて状態に戻していた。低周波・高 Q では
+    /// `b0 = alpha/a0` が極端に小さく (50Hz・ERB Q で約 192/32768 = 0.0059)、
+    /// 1 サンプルあたりの寄与が数十しかないので、丸め損失が相対的に巨大だった。
+    /// 実測: 最弱フォルマント振幅 3200 の純音が **50-65Hz で全く発火しない**
+    /// (帯域数を 240 本に増やしても同じ = 幾何でなく量子化が原因)。
+    /// しかも Q を上げると alpha は 1/Q に比例して小さくなるので、
+    /// **選択性を上げようとするほど低域が聞こえなくなる**という悪循環だった。
+    ///
+    /// 状態に小数ビットを持たせるのは固定小数点 IIR の定石。
+    /// **整数のまま桁を増やすだけ**なので原理 4 (整数演算) に一切触れない。
+    pub y1: i64,
+    pub y2: i64,
     /// Q15 の戻し方を「ゼロ方向切り捨て」にするか (**既定 true**・2026-08-25 ユーザー判断 案ア)。
     ///
     /// `false` にすると従来の算術シフト (floor) に戻る = ロールバック経路。
@@ -124,27 +135,35 @@ impl BandpassBiquad {
     /// 内部は i64 で計算してオーバーフローを防止、最後に Q15 シフト。
     #[inline]
     pub fn process(&mut self, x0: i32) -> i32 {
-        // y0 = b0*x0 + b1*x1 + b2*x2 - a1*y1 - a2*y2 (全て Q15 係数 × 通常スケール状態)
-        let acc: i64 = (self.b0 as i64) * (x0 as i64)
+        // y0 = b0*x0 + b1*x1 + b2*x2 - a1*y1 - a2*y2
+        // 状態 y1/y2 は 2^STATE_SHIFT 倍で保持しているので、分子側も同じだけ持ち上げる。
+        let num: i64 = (self.b0 as i64) * (x0 as i64)
             + (self.b1 as i64) * (self.x1 as i64)
-            + (self.b2 as i64) * (self.x2 as i64)
-            - (self.a1 as i64) * (self.y1 as i64)
-            - (self.a2 as i64) * (self.y2 as i64);
-        let y0 = if self.magnitude_truncation {
-            // ゼロ方向切り捨て = 受動的損失。除算器を使わずシフトと条件加算だけで書く
-            // (DRP には除算器が無い前提。`acc / 32768` と厳密に同値・テストで固定)。
+            + (self.b2 as i64) * (self.x2 as i64);
+        let acc: i64 = (num << STATE_SHIFT)
+            - (self.a1 as i64) * self.y1
+            - (self.a2 as i64) * self.y2;
+
+        // Q15 を戻す。ゼロ方向切り捨て (受動的損失) でリミットサイクルを構造的に潰す。
+        let y0_hp: i64 = if self.magnitude_truncation {
             let bias: i64 = if acc < 0 { 32767 } else { 0 };
-            ((acc + bias) >> 15) as i32
+            (acc + bias) >> 15
         } else {
-            (acc >> 15) as i32 // 従来 (算術シフト = floor)
+            acc >> 15 // 旧挙動 (算術シフト = floor)
         };
 
-        // 状態更新
         self.x2 = self.x1;
         self.x1 = x0;
         self.y2 = self.y1;
-        self.y1 = y0;
-        y0
+        self.y1 = y0_hp;
+
+        // 返り値は従来と同じ整数スケール (下流は無変更)
+        let out_bias: i64 = if y0_hp < 0 && self.magnitude_truncation {
+            (1 << STATE_SHIFT) - 1
+        } else {
+            0
+        };
+        ((y0_hp + out_bias) >> STATE_SHIFT) as i32
     }
 
     /// 状態をゼロクリア (新しいトライアル開始時など)
@@ -316,7 +335,33 @@ pub const F_MAX_HZ: f64 = 4000.0;
 /// 発火閾値 (圧縮済み包絡線の閾値).
 /// 純音 amplitude 8000 で中心帯域は sqrt(env)≈230、非中心帯域は ~150 程度になる.
 /// 200 にすると中心帯域のみ発火 (周波数選択性確保).
-pub const FIRE_THRESHOLD: i32 = 200;
+pub const FIRE_THRESHOLD: i32 = 160;
+
+/// biquad の内部状態が持つ小数ビット数 (2026-08-25 追加)。
+///
+/// 係数は Q1.15 のまま。**状態 y[n-1], y[n-2] だけ**を 2^STATE_SHIFT 倍して保持し、
+/// 再帰の途中で整数に丸めないようにする。量子化雑音が 1/2^STATE_SHIFT になる。
+/// 返り値は従来どおり整数スケールなので、下流 (包絡線検出器) は無変更。
+pub const STATE_SHIFT: i32 = 8;
+
+/// 周波数選択性の鋭さ倍率 (ERB の Q に掛ける・2026-08-25 追加)。
+///
+/// 設計書 §1.5: 外有毛細胞 (OHC) は「周波数選択性を **1/3 oct → 1/10 oct** まで
+/// 鋭くする。これがないと『補聴器をつけても言葉が聞き取れない』
+/// (sensorineural hearing loss の典型症状)」。**未実装だった。**
+///
+/// 実測 (`formant_probe`・母音の指定フォルマントを正解として):
+///   Q倍率  被覆15/15を保った最良精度  スペクトルの穴/200
+///     ×1              47.6%                 0
+///     ×2              66.0%                 1
+///     **×3              84.2%                 0**
+///     ×4              84.2%                 1
+///     ×6             100.0%                18  ← 穴だらけ (精度は「聞こえないから」上がる)
+///
+/// ×6 の 100% は帯域が狭くなって鳴らなくなったための見せかけ。
+/// **×3 が「穴ゼロ・非減衰ゼロで最良」**であり、設計書の生物学的数値
+/// (1/3 oct → 1/10 oct ≈ 3.3 倍) ともほぼ一致する。
+pub const Q_SHARPENING: f64 = 3.0;
 /// パルス幅 (M1 input への electric current 値). M1 の INPUT_CURRENT=60 と整合.
 pub const FIRE_CURRENT: i32 = 60;
 /// 不応期 (step 単位). 連続音でも発火が頭打ちになる.
@@ -386,7 +431,7 @@ impl Cochlea {
     pub fn new() -> Self {
         let center_freqs = erb_spaced_freqs(F_MIN_HZ, F_MAX_HZ, N_BANDS);
         let bands: Vec<BandpassBiquad> = center_freqs.iter()
-            .map(|&fc| BandpassBiquad::new(fc, erb_q_factor(fc), SAMPLE_RATE_HZ))
+            .map(|&fc| BandpassBiquad::new(fc, erb_q_factor(fc) * Q_SHARPENING, SAMPLE_RATE_HZ))
             .collect();
         let envelopes: Vec<EnvelopeDetector> = (0..N_BANDS)
             .map(|_| EnvelopeDetector::new(ENV_LEAK_SHIFT))
@@ -470,7 +515,8 @@ mod tests {
         let freqs = erb_spaced_freqs(F_MIN_HZ, F_MAX_HZ, N_BANDS);
         let mut bad = 0;
         for &fc in freqs.iter() {
-            let mut bp = BandpassBiquad::new(fc, erb_q_factor(fc), 16000.0);
+            // 出荷フィルタを反映させる (Q_SHARPENING 込み)
+            let mut bp = BandpassBiquad::new(fc, erb_q_factor(fc) * Q_SHARPENING, 16000.0);
             bp.magnitude_truncation = magtrunc;
             let mut tail = 0i32;
             for n in 0..4000 {
@@ -486,12 +532,22 @@ mod tests {
         bad
     }
 
-    /// 既定の算術シフトでは自己発振が起きることを固定する (バグの記録・2026-08-25)。
+    /// 算術シフト (旧既定) では自己発振が起きることを固定する (バグの記録・2026-08-25)。
     /// 仕様ではない。`magnitude_truncation` が直す対象。
+    ///
+    /// 本数は出荷フィルタに依存する (履歴):
+    ///   Q_SHARPENING 導入前 (ERB Q・Q15 状態)      24 本
+    ///   Q ×3 導入後 (Q15 状態)                     20 本
+    ///   状態を Q{STATE_SHIFT} に高精度化した後      25 本
+    /// 高精度化で増えるのは、細かい振幅の振動が丸めで消えなくなるため。
+    /// **どの構成でもゼロではない**ことがこのテストの主張。
     #[test]
     fn default_shift_produces_limit_cycles() {
-        assert_eq!(limit_cycling_bands(false), 24,
-            "既定の acc>>15 で自己発振する帯域数が変わった");
+        let n = limit_cycling_bands(false);
+        assert!(n > 0, "旧既定の acc>>15 で自己発振が 1 本も起きない — バグの記録が失効した");
+        assert_eq!(n, 25,
+            "自己発振する帯域数が変わった (Q_SHARPENING={} / STATE_SHIFT={} 前提)",
+            Q_SHARPENING, STATE_SHIFT);
     }
 
     /// ゼロ方向切り捨てなら 1 本も自己発振しない。
@@ -551,6 +607,35 @@ mod tests {
         let seeds: std::collections::HashSet<u16> =
             c.spontaneous.iter().map(|s| s.state).collect();
         assert!(seeds.len() > N_BANDS / 2, "ノイズ源の種が重複しすぎている: {}", seeds.len());
+    }
+
+    /// 低域の弱い純音が聞こえること (2026-08-25 に直した欠陥の回帰テスト)。
+    ///
+    /// 状態を高精度化する前は、最弱フォルマント振幅 3200 の純音が
+    /// **50-65Hz で全く発火しなかった** (帯域を 240 本に増やしても同じ)。
+    /// 正解の出どころ: その周波数・その振幅の音を入れたのは実験者。
+    #[test]
+    fn weak_low_frequency_tone_is_heard() {
+        use super::super::phoneme_synth::{freq_to_phase_step, sin_lookup};
+        for &f_hz in [50.0f64, 55.0, 60.0, 65.0].iter() {
+            let mut c = Cochlea::new();
+            let step = freq_to_phase_step(f_hz);
+            let mut phase = 0u32;
+            let mut fired = false;
+            // 170ms
+            for _ in 0..(170 * 16 / SAMPLES_PER_STEP as i32) {
+                let mut buf = [0i32; SAMPLES_PER_STEP];
+                for b in buf.iter_mut() {
+                    *b = (sin_lookup(phase) * 3200) >> 14;
+                    phase = phase.wrapping_add(step);
+                }
+                if c.process_step(&buf).iter().any(|&v| v != 0) {
+                    fired = true;
+                    break;
+                }
+            }
+            assert!(fired, "{:.0}Hz・振幅3200 の純音が 1 帯域も発火させない", f_hz);
+        }
     }
 
     /// 既定の蝸牛は自己発振しない (出荷状態の不変条件)。
