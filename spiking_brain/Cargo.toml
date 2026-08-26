@@ -251,3 +251,7 @@ path = "src_phase2_dram/bin/m0_m1_dram_pipeline.rs"
 [[bin]]
 name = "dram_thermometer_probe"
 path = "src_phase2_dram/bin/dram_thermometer_probe.rs"
+
+[[bin]]
+name = "kana_identify"
+path = "src_phase2_f/bin/kana_identify.rs"
