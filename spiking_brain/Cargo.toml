@@ -255,3 +255,11 @@ path = "src_phase2_dram/bin/dram_thermometer_probe.rs"
 [[bin]]
 name = "kana_identify"
 path = "src_phase2_f/bin/kana_identify.rs"
+
+[[bin]]
+name = "where_is_the_information"
+path = "src_phase2_f/bin/where_is_the_information.rs"
+
+[[bin]]
+name = "synapse_equilibrium"
+path = "src_phase2_f/bin/synapse_equilibrium.rs"
