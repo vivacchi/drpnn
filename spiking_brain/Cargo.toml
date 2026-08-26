@@ -287,3 +287,7 @@ path = "src_phase2_f/bin/baseline_subtraction.rs"
 [[bin]]
 name = "context_enhancement"
 path = "src_phase2_f/bin/context_enhancement.rs"
+
+[[bin]]
+name = "equilibrium_measurement"
+path = "src_phase2_f/bin/equilibrium_measurement.rs"
