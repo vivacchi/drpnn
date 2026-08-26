@@ -396,124 +396,226 @@ fn probe_with_permutation(x: &[Vec<f64>], y: &[usize], n_class: usize) -> Cell {
     }
 }
 
-struct Axis { name: &'static str, judged: bool, waves: Vec<(usize, Vec<i32>)>, variants: usize }
+// ================================================================ 第2回・反証監査を受けた改訂
+//
+// 反証監査 (6角度) が結論を壊した。検算で確定した:
+//
+//  * 判定セルの余裕が、既知未修正の合成器欠陥の件数とちょうど同じだった。
+//    M0.5 2窓 = 実測 17/184 vs 置換最大 13/184 で差 4。健全性印字の「重複 4」は
+//    「ん」の 4 条件がバイト同一であること (Mora::Moraic が f0 を渡さず、
+//    Nasal は雑音を消費しない)。真ラベル側だけがタダ正解を受け取る。
+//  * 同じ実行が「消していない」を否定していた。判定軸/参照点 (同じ段・同じ読み出し)
+//    の保存率は全読み出しで 8〜21%。p<0.01 が licence するのは「ゼロではない」まで。
+//
+// 改訂 (実測前に固定):
+//
+//  1. **変動の無いクラスを全軸から除く。** そのクラスの全条件がバイト同一なら、
+//     不変性のテストになっていないうえ、真ラベル側だけがタダ正解を得る。
+//  2. **判定文から「消していない」を削る。** 支持されるのは「ゼロではない」まで。
+//  3. **保存率 (判定軸/参照点) を必ず印字する。**
+//  4. **クラス別の正解数を印字する。**
+//  5. **予測との突き合わせを印字する** (第1回は出力に残らなかった)。
+//
+// G72a: 除染後、判定軸 M0.5 のいずれかのセルで p < 0.01 なら
+//       **「線形に読める成分が残っている」**。それ以上は言わない。
+
+struct Axis {
+    name: &'static str,
+    judged: bool,
+    classes: Vec<&'static str>,
+    dropped: Vec<&'static str>,
+    y: Vec<usize>,
+    waves: Vec<Vec<i32>>,
+    variants: usize,
+}
+
+/// 変動の無いクラス (全条件がバイト同一) を除いて Axis を作る。
+fn make_axis(name: &'static str, judged: bool, per_kana: Vec<Vec<Vec<i32>>>, variants: usize) -> Axis {
+    let mut classes: Vec<&'static str> = Vec::new();
+    let mut dropped: Vec<&'static str> = Vec::new();
+    let mut y: Vec<usize> = Vec::new();
+    let mut waves: Vec<Vec<i32>> = Vec::new();
+    for (k, ws) in per_kana.into_iter().enumerate() {
+        if ws.iter().all(|w| *w == ws[0]) { dropped.push(KANA[k]); continue; }
+        let ci = classes.len();
+        classes.push(KANA[k]);
+        for w in ws { y.push(ci); waves.push(w); }
+    }
+    Axis { name, judged, classes, dropped, y, waves, variants }
+}
 
 fn build_axes() -> Vec<Axis> {
-    let (mut main, mut f0, mut lv, mut sd) = (vec![], vec![], vec![], vec![]);
+    let mut main: Vec<Vec<Vec<i32>>> = Vec::new();
+    let mut f0: Vec<Vec<Vec<i32>>> = Vec::new();
+    let mut lv: Vec<Vec<Vec<i32>>> = Vec::new();
+    let mut sd: Vec<Vec<Vec<i32>>> = Vec::new();
     for (k, &kana) in KANA.iter().enumerate() {
-        for (v, &f) in F0S.iter().enumerate() {
-            main.push((k, wave_of(kana, f, utterance_seed(k, v), 1, 1)));
-            f0.push((k, wave_of(kana, f, SEEDS[0], 1, 1)));
-        }
-        for &(gn, gd) in LEVELS.iter() { lv.push((k, wave_of(kana, F0S[0], SEEDS[0], gn, gd))); }
-        for &s in SEEDS.iter() { sd.push((k, wave_of(kana, F0S[0], s, 1, 1))); }
+        main.push(F0S.iter().enumerate()
+            .map(|(v, &f)| wave_of(kana, f, utterance_seed(k, v), 1, 1)).collect());
+        f0.push(F0S.iter().map(|&f| wave_of(kana, f, SEEDS[0], 1, 1)).collect());
+        lv.push(LEVELS.iter().map(|&(gn, gd)| wave_of(kana, F0S[0], SEEDS[0], gn, gd)).collect());
+        sd.push(SEEDS.iter().map(|&s| wave_of(kana, F0S[0], s, 1, 1)).collect());
     }
     vec![
-        Axis { name: "話者の言い直し (F0+雑音実現が全条件で異なる) [判定軸]", judged: true, waves: main, variants: F0S.len() },
-        Axis { name: "F0 のみ (雑音実現固定・指紋照合込み) [判定対象外]", judged: false, waves: f0, variants: F0S.len() },
-        Axis { name: "レベルのみ (0/-6/-12 dB) [判定対象外]", judged: false, waves: lv, variants: LEVELS.len() },
-        Axis { name: "雑音実現のみ (参照点) [判定対象外]", judged: false, waves: sd, variants: SEEDS.len() },
+        make_axis("話者の言い直し (F0+雑音が全条件で異なる) [判定軸]", true, main, F0S.len()),
+        make_axis("F0 のみ (雑音固定) [判定対象外]", false, f0, F0S.len()),
+        make_axis("レベルのみ (0/-6/-12 dB) [判定対象外]", false, lv, LEVELS.len()),
+        make_axis("雑音実現のみ (参照点) [判定対象外]", false, sd, SEEDS.len()),
     ]
 }
 
 fn health(x: &[Vec<f64>]) -> (usize, usize) {
     let n = x.len();
-    let silent = x.iter().filter(|v| v.iter().all(|&z| z == 0.0)).count();
-    let twin = (0..n).filter(|&i| (0..n).any(|j| j != i && x[j] == x[i])).count();
-    (silent, twin)
+    (x.iter().filter(|v| v.iter().all(|&z| z == 0.0)).count(),
+     (0..n).filter(|&i| (0..n).any(|j| j != i && x[j] == x[i])).count())
 }
 
-fn run_cell(stage: &str, x: &[Vec<f64>], y: &[usize], n_variants: usize) -> Cell {
+/// クラス別の正解数 (線形プローブ・λ は RIDGE_GRID[1] 固定)
+fn per_class_hits(x: &[Vec<f64>], y: &[usize], n_class: usize) -> Vec<usize> {
+    let (s, _) = fold_scores(x, RIDGE_GRID[1]);
+    let n = x.len();
+    let mut hits = vec![0usize; n_class];
+    for held in 0..n {
+        let nt = (n - 1) as f64;
+        let mut per = vec![0f64; n_class];
+        let mut cnt = vec![0f64; n_class];
+        let mut total = 0f64;
+        for i in 0..n {
+            if i == held { continue; }
+            per[y[i]] += s[held][i];
+            cnt[y[i]] += 1.0;
+            total += s[held][i];
+        }
+        let mut best = (f64::NEG_INFINITY, usize::MAX);
+        for c in 0..n_class {
+            let sc = per[c] - cnt[c] / nt * total;
+            if sc > best.0 { best = (sc, c); }
+        }
+        if best.1 == y[held] { hits[y[held]] += 1; }
+    }
+    hits
+}
+
+#[derive(Clone)]
+struct Row { stage: String, raw: f64, cen: f64, zs: f64, wh: f64, probe: f64, p: f64 }
+
+fn run_cell(stage: &str, x: &[Vec<f64>], y: &[usize], n_class: usize, n_variants: usize) -> Row {
     let n = x.len();
     let (silent, twin) = health(x);
     let ch_nn = (n_variants - 1) as f64 / (n - 1) as f64 * 100.0;
-    let ch_probe = 100.0 / KANA.len() as f64;
-    let (raw, un_raw) = nn_accuracy(x, y, &|a, b| cosine(a, b));
+    let (raw, un) = nn_accuracy(x, y, &|a, b| cosine(a, b));
     let (cen, _) = nn_accuracy(&center(x), y, &|a, b| cosine(a, b));
     let (zs, _) = nn_accuracy(&zscore(x), y, &|a, b| cosine(a, b));
     let wh = match whiten(x) {
         Some(w) => nn_accuracy(&w, y, &|a, b| -a.iter().zip(b.iter()).map(|(p, q)| (p - q).powi(2)).sum::<f64>()).0,
         None => f64::NAN,
     };
-    let cell = probe_with_permutation(x, y, KANA.len());
-    println!("  {:<16} n={:>3} p次元={:>3} | 無音{:>2} 重複{:>3} 同点棄却{:>3} 特異fold{:>3}",
-             stage, n, x[0].len(), silent, twin, un_raw, cell.singular);
+    let c = probe_with_permutation(x, y, n_class);
+    let hit_n = (c.probe / 100.0 * n as f64).round() as i32;
+    let perm_n = (c.perm_max / 100.0 * n as f64).round() as i32;
+    println!("  {:<16} n={:>3} p次元={:>3} クラス={:>2} | 無音{:>2} 重複{:>3} 同点棄却{:>3} 特異fold{:>3}",
+             stage, n, x[0].len(), n_class, silent, twin, un, c.singular);
     println!("  {:<16} 1-NN: 素 {:>5.1}% 中心化 {:>5.1}% 標準化 {:>5.1}% 白色化 {:>5.1}% (transductive・チャンス {:.2}%)",
              "", raw, cen, zs, wh, ch_nn);
-    println!("  {:<16} 線形プローブ **{:>5.1}%** vs 置換最大 {:>5.1}% ・ **p = {:.3}** (チャンス {:.2}%)",
-             "", cell.probe, cell.perm_max, cell.p_value, ch_probe);
-    cell
+    println!("  {:<16} 線形 **{:>5.1}%** ({}/{}) vs 置換最大 {:>5.1}% ({}/{}) ・ **p={:.3}** ・ 差 {} 件 (重複 {} 件・チャンス {:.2}%)",
+             "", c.probe, hit_n, n, c.perm_max, perm_n, n, c.p_value,
+             hit_n - perm_n, twin, 100.0 / n_class as f64);
+    Row { stage: stage.to_string(), raw, cen, zs, wh, probe: c.probe, p: c.p_value }
 }
 
 fn main() {
-    println!("=== 犯人は M0 か M1 か — 情報は失われているのか、読めていないだけなのか ===");
+    println!("=== 犯人は M0 か M1 か (第2回・反証監査を受けた改訂版) ===");
     println!();
-    println!("【計測器であって系ではない】線形プローブは教師あり・浮動小数点。M1 に入れるものではない。");
-    println!("【この計器の非対称】時間を畳む/2窓に切る読み出しなので、null が出ても");
-    println!("  『時刻に情報が無い』ことは示せない。**M0 を無罪にする方には使えるが有罪にする方には弱い。**");
+    println!("【改訂の理由】第1回の判定セルの余裕 (17 vs 13 = 4件) が、既知未修正の");
+    println!("合成器欠陥「ん の4条件がバイト同一」の件数とちょうど同じだった。");
+    println!("また保存率 8〜21% を同じ実行が出しているのに『消していない』と書いていた。");
     println!();
-    println!("判定軸 = 主軸のみ。λ グリッド {:?} の最大で判定・置換も同じ最大。置換 {} 回。",
-             RIDGE_GRID, N_PERM);
-    println!("統合規則 (実測前に固定):");
-    println!("  M0.5 のどれかで p<0.01            -> 情報は M1 に届いている");
-    println!("  M0.5 全滅(全て p>0.2) & M0 で p<0.01 -> M0.5 が落としている");
-    println!("  M0 も M0.5 も全滅                  -> この読み出しでは情報が見つからない");
-    println!("  それ以外                           -> 中間 (どちらにも倒さない)");
+    println!("【改訂・実測前に固定】");
+    println!("  1. 変動の無いクラス (全条件がバイト同一) を全軸から除く");
+    println!("  2. 判定文から『消していない』を削る。支持されるのは『ゼロではない』まで");
+    println!("  3. 保存率 (判定軸/参照点) を印字   4. クラス別の正解数を印字");
+    println!("  5. 予測との突き合わせを印字");
+    println!();
+    println!("G72a: 除染後、判定軸 M0.5 のどれかで p<0.01 なら『線形に読める成分が残っている』");
 
-    // --- 無情報ベースライン: 乱数特徴でプローブがチャンス付近に来るか ---
     println!();
-    println!("--- 無情報ベースライン (乱数特徴・情報ゼロ) ---");
-    let y_ref: Vec<usize> = (0..KANA.len()).flat_map(|k| std::iter::repeat(k).take(4)).collect();
+    println!("--- 無情報ベースライン (乱数特徴) ---");
+    let y_ref: Vec<usize> = (0..45).flat_map(|k| std::iter::repeat(k).take(4)).collect();
     let mut st = 0x1234_5678_9ABC_DEF0u64;
     let rnd: Vec<Vec<f64>> = (0..y_ref.len()).map(|_| (0..84).map(|_| {
         st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         ((st >> 33) as f64 / (1u64 << 31) as f64) * 50.0
     }).collect()).collect();
-    let base = probe_with_permutation(&rnd, &y_ref, KANA.len());
-    println!("  線形プローブ {:.1}% ・ 置換最大 {:.1}% ・ p = {:.3} (チャンス {:.2}%)",
-             base.probe, base.perm_max, base.p_value, 100.0 / KANA.len() as f64);
-    println!("  ここが チャンス付近 (約 2.2%) に来ていなければ、推定器が壊れている。");
+    let b = probe_with_permutation(&rnd, &y_ref, 45);
+    println!("  線形 {:.1}% ・ 置換最大 {:.1}% ・ p={:.3} (チャンス {:.2}%)",
+             b.probe, b.perm_max, b.p_value, 100.0 / 45.0);
 
     let axes = build_axes();
-    let mut judged: Vec<(&str, Cell)> = Vec::new();
+    let mut judged: Vec<Row> = Vec::new();
+    let mut rows: Vec<(String, Row)> = Vec::new();
     for axis in axes.iter() {
         println!();
-        println!("--- 軸: {} ({} 条件) ---", axis.name, axis.waves.len());
-        let y: Vec<usize> = axis.waves.iter().map(|(k, _)| *k).collect();
+        println!("--- 軸: {} ({} 条件 / {} クラス) ---",
+                 axis.name, axis.waves.len(), axis.classes.len());
+        if !axis.dropped.is_empty() {
+            println!("  除いた「変動の無いクラス」{} 音: {}",
+                     axis.dropped.len(), axis.dropped.join(""));
+        }
+        let nc = axis.classes.len();
         for &(use_cn, name) in [(false, "M0"), (true, "M0.5")].iter() {
             let feats: Vec<(Vec<f64>, Vec<f64>)> =
-                axis.waves.iter().map(|(_, w)| features(w, use_cn)).collect();
+                axis.waves.iter().map(|w| features(w, use_cn)).collect();
             let flat: Vec<Vec<f64>> = feats.iter().map(|(f, _)| f.clone()).collect();
-            let c1 = run_cell(&format!("{} 時間平均", name), &flat, &y, axis.variants);
             let win: Vec<Vec<f64>> = feats.iter().map(|(_, w)| w.clone()).collect();
-            let c2 = run_cell(&format!("{} 2窓", name), &win, &y, axis.variants);
+            let r1 = run_cell(&format!("{} 時間平均", name), &flat, &axis.y, nc, axis.variants);
+            let r2 = run_cell(&format!("{} 2窓", name), &win, &axis.y, nc, axis.variants);
+            rows.push((axis.name.to_string(), r1.clone()));
+            rows.push((axis.name.to_string(), r2.clone()));
             if axis.judged {
-                judged.push((if use_cn { "M0.5 時間平均" } else { "M0 時間平均" }, c1));
-                judged.push((if use_cn { "M0.5 2窓" } else { "M0 2窓" }, c2));
+                judged.push(r1);
+                judged.push(r2);
+                if use_cn {
+                    let hits = per_class_hits(&win, &axis.y, nc);
+                    let names: Vec<String> = axis.classes.iter().enumerate()
+                        .filter(|(i, _)| hits[*i] > 0)
+                        .map(|(i, c)| format!("{}{}", c, hits[i])).collect();
+                    println!("  {:<16} クラス別 (M0.5 2窓): 当たったクラス {}/{} -> {}",
+                             "", hits.iter().filter(|&&h| h > 0).count(), nc,
+                             if names.is_empty() { "なし".to_string() } else { names.join(" ") });
+                }
             }
         }
     }
 
     println!();
-    println!("=== 判定 (主軸のみ・規則は実測前に固定) ===");
-    for (n, c) in judged.iter() {
-        println!("  {:<16} 線形 {:>5.1}% ・ p = {:.3}", n, c.probe, c.p_value);
+    println!("=== 保存率 (判定軸 / 参照点・同じ段・同じ読み出し) ===");
+    println!("  段                 素    中心化   標準化   白色化    線形");
+    for stage in ["M0 時間平均", "M0 2窓", "M0.5 時間平均", "M0.5 2窓"].iter() {
+        let j = rows.iter().find(|(a, r)| a.contains("判定軸") && r.stage == *stage);
+        let rf = rows.iter().find(|(a, r)| a.contains("参照点") && r.stage == *stage);
+        if let (Some((_, j)), Some((_, f))) = (j, rf) {
+            println!("  {:<16} {:>5.1}%  {:>5.1}%  {:>5.1}%  {:>5.1}%  {:>5.1}%",
+                     stage, j.raw / f.raw * 100.0, j.cen / f.cen * 100.0,
+                     j.zs / f.zs * 100.0, j.wh / f.wh * 100.0, j.probe / f.probe * 100.0);
+        }
     }
-    let sig = |k: &str| judged.iter().any(|(n, c)| n.starts_with(k) && c.p_value < 0.01);
-    let dead = |k: &str| judged.iter().filter(|(n, _)| n.starts_with(k)).all(|(_, c)| c.p_value > 0.2);
+
     println!();
-    if sig("M0.5") {
-        println!("  -> **情報は M1 に届いている。** M0/M0.5 は情報を消していない。");
-        println!("     ただし示したのは『線形に読める成分が有意に残る』ことだけで、");
-        println!("     M1 が原理の内側で同じことをできるかは別問題。");
-    } else if dead("M0.5") && sig("M0") {
-        println!("  -> **M0.5 が落としている。** M0 には在るが M0.5 で消えている。");
-    } else if dead("M0.5") && dead("M0") {
-        println!("  -> **この読み出しでは情報が見つからない。**");
-        println!("     時刻に残る可能性・非線形に符号化されている可能性は否定できない。");
-        println!("     追加測定: 時間分解を細かくする (2窓 -> 8窓) を先に 1 つやること。");
-    } else {
-        println!("  -> **中間。どちらにも倒さない。**");
-        println!("     追加測定: 置換回数を 999 に上げて p を締めること。");
+    println!("=== 判定 (規則は実測前に固定) ===");
+    for r in judged.iter() {
+        println!("  {:<16} 線形 {:>5.1}% ・ p = {:.3}", r.stage, r.probe, r.p);
     }
+    let sig = judged.iter().any(|r| r.stage.starts_with("M0.5") && r.p < 0.01);
+    println!();
+    println!("  G72a -> {}", if sig {
+        "**線形に読める成分が残っている** (これ以上は言わない)"
+    } else {
+        "**線形に読める成分は見つからない** (時刻・非線形の可能性は否定できない)"
+    });
+    println!();
+    let pm = judged.iter().find(|r| r.stage == "M0.5 時間平均").map(|r| r.probe).unwrap_or(f64::NAN);
+    println!("  【予測との突き合わせ】主軸 x M0.5 x 時間平均 の予測 30-60% ・ 実測 {:.1}% -> {}",
+             pm, if pm >= 30.0 && pm <= 60.0 { "当たり" } else { "**外れ**" });
+    println!("  【言わないこと】『M0/M0.5 は情報を消していない』は支持されない。");
+    println!("  保存率は上表のとおりで、有意性が licence するのは『ゼロではない』まで。");
 }
