@@ -307,3 +307,7 @@ path = "src_phase2_f/bin/corpus_acoustic.rs"
 [[bin]]
 name = "voicing_check"
 path = "src_phase2_f/bin/voicing_check.rs"
+
+[[bin]]
+name = "feature_information"
+path = "src_phase2_f/bin/feature_information.rs"
