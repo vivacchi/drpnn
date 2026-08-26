@@ -299,3 +299,7 @@ path = "src_phase2_f/bin/kana_continuous.rs"
 [[bin]]
 name = "corpus_moras"
 path = "src_phase2_f/bin/corpus_moras.rs"
+
+[[bin]]
+name = "corpus_acoustic"
+path = "src_phase2_f/bin/corpus_acoustic.rs"
