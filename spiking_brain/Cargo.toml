@@ -283,3 +283,7 @@ path = "src_phase2_f/bin/fiber_population.rs"
 [[bin]]
 name = "baseline_subtraction"
 path = "src_phase2_f/bin/baseline_subtraction.rs"
+
+[[bin]]
+name = "context_enhancement"
+path = "src_phase2_f/bin/context_enhancement.rs"
