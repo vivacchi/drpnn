@@ -45,6 +45,15 @@ pub fn sin_table() -> &'static [i32; SIN_TABLE_SIZE] {
 /// voice bar の周波数に使う。無声子音では使われない。
 pub const F0_DEFAULT_HZ: f64 = 150.0;
 
+/// 破裂音の閉鎖区間が子音長に占める割合 [%] (2026-08-27)。
+///
+/// 生体の破裂音は**閉鎖が破裂より長い** (閉鎖 50ms / 破裂 10-20ms = 閉鎖が 70-80%)。
+/// 旧実装は固定 10ms で、子音長 30ms のうち 33% しかなく**比率が逆**だった。
+///
+/// **有声のときこの区間は voice bar だけが鳴る = 前有声の長さそのもの。**
+/// 日本語の前有声は生体で 20-70ms。
+pub const CLOSURE_FRACTION_PERCENT: usize = 67;
+
 #[inline]
 pub fn sin_lookup(phase_q24: u32) -> i32 {
     let table = sin_table();
@@ -612,7 +621,23 @@ pub fn synth_consonant_banded(c: Consonant, duration_ms: f64, f0_hz: f64, noise:
         Consonant::Plosive { burst_freq_low, burst_freq_high, voiced } => {
             let mut bp = band_filter(burst_freq_low, burst_freq_high);
             let mut out = Vec::with_capacity(n_samples);
-            let silent = ((10.0 * SAMPLE_RATE_HZ / 1000.0) as usize).min(n_samples / 2);
+            // 2026-08-27: **閉鎖長を生体の比率に合わせた (軌道修正)。**
+            //
+            // 旧: 固定 10ms。子音長 30ms のうち **33%** が閉鎖。
+            // 生体: 破裂音は**閉鎖が破裂より長い** (閉鎖 50ms / 破裂 10-20ms = 70-80%)。
+            //       **比率が逆になっていた。**
+            // 新: 子音長の CLOSURE_FRACTION_PERCENT (= 67%)。
+            //     **CONSONANT_MS 自体は変えない** — 変えると母音との配分が動いて
+            //     これまでの測定が比較不能になるため。
+            //
+            // **有声のときこの区間は voice bar だけが鳴る = 前有声の長さそのもの。**
+            // §14.22.4 で「閉鎖 10ms はモーラ 120ms の 8% で、マージンが
+            // 小数第4位になる」と記録した。それへの手当て。
+            //
+            // **旧経路 (synth_consonant・456 行) は変えない。**
+            // あちらは有声性を実装していないので閉鎖長が手がかりにならず、
+            // 変えると G1 (旧版で pa/ki/tu が完全同一) の対照が動くだけである。
+            let silent = (n_samples * CLOSURE_FRACTION_PERCENT / 100).min(n_samples * 4 / 5);
             for _ in 0..silent {
                 out.push(0);
             }
