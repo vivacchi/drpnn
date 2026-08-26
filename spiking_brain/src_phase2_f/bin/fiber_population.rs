@@ -128,6 +128,17 @@ fn fiber_spikes(wave: &[i32], gain_num: i32, gain_den: i32, k: usize) -> Vec<u32
     counts
 }
 
+
+/// 表現B: 各帯域で K 本の発火数を合算し、N 次元に畳む。
+///
+/// 生体でも蝸牛神経核は多数の聴神経線維の収束を受ける。
+/// **表現A (N*K の生ベクトル) は同一性とレベルが絡んだままだが、
+/// 合算すると パターン=同一性 / 大きさ=レベル に分離される。
+/// コサインは大きさに不変なので、自動的にレベル不変になりうる。**
+fn fold_bands(c: &[u32], k: usize) -> Vec<u32> {
+    (0..N_BANDS).map(|ch| (0..k).map(|f| c[ch * k + f]).sum()).collect()
+}
+
 fn cosine(a: &[u32], b: &[u32]) -> f64 {
     let dot: f64 = a.iter().zip(b.iter()).map(|(&x, &y)| x as f64 * y as f64).sum();
     let na: f64 = a.iter().map(|&x| (x as f64).powi(2)).sum::<f64>().sqrt();
@@ -147,18 +158,22 @@ fn gain_of(db: f64) -> (i32, i32) {
 
 struct LevelRow { db: f64, bands: Vec<usize>, coverage: usize, distinct: usize, silent: usize }
 
-fn measure(k: usize, levels: &[f64]) -> (Vec<LevelRow>, Vec<Vec<Vec<u32>>>) {
+fn measure(k: usize, levels: &[f64], fold: bool) -> (Vec<LevelRow>, Vec<Vec<Vec<u32>>>) {
     let vs = vowels();
     let freqs = Cochlea::new().center_freqs.clone();
     let mut rows = Vec::new();
     let mut all: Vec<Vec<Vec<u32>>> = Vec::new(); // [level][vowel] -> counts
     for &db in levels.iter() {
         let (gn, gd) = gain_of(db);
-        let per_vowel: Vec<Vec<u32>> = vs.iter()
+        let raw: Vec<Vec<u32>> = vs.iter()
             .map(|v| fiber_spikes(&synth_vowel(v, VOWEL_MS), gn, gd, k))
             .collect();
+        // 被覆と発火帯域は raw (線維単位) で見る。分布の比較だけ表現を切り替える。
+        let per_vowel: Vec<Vec<u32>> = if fold {
+            raw.iter().map(|c| fold_bands(c, k)).collect()
+        } else { raw.clone() };
         // 発火した「帯域」の数 (どれか1本でも鳴れば その帯域は鳴っている)
-        let bands: Vec<usize> = per_vowel.iter().map(|c| {
+        let bands: Vec<usize> = raw.iter().map(|c| {
             (0..N_BANDS).filter(|&ch| (0..k).any(|f| c[ch * k + f] > 0)).count()
         }).collect();
         // 被覆: 各母音の指定3フォルマントの最近傍帯域が鳴っているか
@@ -166,7 +181,7 @@ fn measure(k: usize, levels: &[f64]) -> (Vec<LevelRow>, Vec<Vec<Vec<u32>>>) {
         for (vi, v) in vs.iter().enumerate() {
             for fi in 0..3 {
                 let ch = nearest_band(&freqs, v.formants_hz[fi]);
-                if (0..k).any(|f| per_vowel[vi][ch * k + f] > 0) { coverage += 1; }
+                if (0..k).any(|f| raw[vi][ch * k + f] > 0) { coverage += 1; }
             }
         }
         // 場所符号の相異: 発火チャネル集合が全10対で相異なるか
@@ -204,11 +219,20 @@ fn main() {
     println!("**既定は変えない。これは測定であって採用ではない。**");
 
     let mut summary: Vec<(usize, f64, f64, bool, bool, bool)> = Vec::new();
+    println!();
+    println!("【表現の比較・実測前に宣言】表現A は同一性とレベルが絡む。表現B は");
+    println!("パターン=同一性 / 大きさ=レベル に分離され、コサインが大きさ不変なので");
+    println!("レベル不変になりうる。**表現B が G76c を通すなら M0 の出力幅を変えずに済む。**");
 
+    for &(fold, rep) in [(false, "表現A: N*K の生ベクトル"), (true, "表現B: 帯域ごとに K 本を合算 (N 次元)")].iter() {
+    println!();
+    println!("################################################################");
+    println!("#### {} ####", rep);
+    println!("################################################################");
     for k in 1..=4usize {
         println!();
         println!("################ K = {} 本/帯域  閾値 {:?} ################", k, thresholds(k));
-        let (rows, all) = measure(k, &LEVELS_DB);
+        let (rows, all) = measure(k, &LEVELS_DB, fold);
 
         println!();
         println!("  レベル  母音ごとの発火帯域数    被覆/15  場所符号/10  無音母音");
@@ -261,7 +285,7 @@ fn main() {
         // G76d 射程 (記述)
         let mut ext_levels: Vec<f64> = LEVELS_DB.to_vec();
         ext_levels.extend_from_slice(&EXTENDED_DB);
-        let (ext_rows, _) = measure(k, &ext_levels);
+        let (ext_rows, _) = measure(k, &ext_levels, fold);
         let alive: Vec<f64> = ext_rows.iter().filter(|r| r.silent == 0).map(|r| r.db).collect();
         let span = if alive.is_empty() { 0.0 } else {
             alive.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
@@ -271,9 +295,8 @@ fn main() {
 
         summary.push((k, min_same, max_diff, g76a, g76b, g76c));
     }
-
     println!();
-    println!("=== まとめ ===");
+    println!("=== {} のまとめ ===", rep);
     println!("  K  閾値                    同一母音最小  別母音最大   G76a  G76b  G76c");
     for &(k, mn, mx, a, b, c) in summary.iter() {
         println!("  {}  {:<22} {:>10.4} {:>11.4}   {:<5} {:<5} {}",
@@ -282,6 +305,9 @@ fn main() {
                  if b { "PASS" } else { "FAIL" },
                  if c { "**PASS**" } else { "FAIL" });
     }
+    summary.clear();
+    }
+
     println!();
     println!("  G76e 対照の健全性: K=1 の行が level_axis の記録 (§14.5.2) と一致するか。");
     println!("    記録: 0dB [35,40,36,39,37] ・ 被覆 0dB 15/15 ・ -21dB と -24dB で無音母音 5");

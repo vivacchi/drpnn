@@ -483,7 +483,7 @@ pub const SPONTANEOUS_INDIVIDUALITY: usize = 4;
 /// 2026-08-26 の回帰チェックで「OFF アームが無いので、観測された差を
 /// 自発発火 ON に帰属できない」と指摘されて追加した。
 /// 既定はあくまでこの定数であり、env は測定のためだけに使う。
-pub const SPONTANEOUS_DEFAULT_AMPLITUDE: i32 = 8;
+pub const SPONTANEOUS_DEFAULT_AMPLITUDE: i32 = 3;
 
 /// 既定振幅を返す (env による上書きを含む)。構築時に一度だけ読む。
 pub fn spontaneous_default_amplitude() -> i32 {
@@ -543,21 +543,16 @@ impl Cochlea {
             center_freqs,
             // 2026-08-26: ユーザー決定により **既定 ON**。
             // コードのコメントは以前から「自発発火は M0 蝸牛が担当する設計に」と
-            // 言っていたが、M0 側が既定 OFF・M1 入力層も 0 (§14.4 の③で消した) で、
-            // **担当がどちらにも無い状態**になっていた。M0 に担当させる。
+            // 言っていたが、M0 側が既定 OFF・M1 入力層も 0 で担当が不在だった。
             //
-            // 値 8 は `spontaneous_probe` が**実測前に宣言した選定規則**
-            // 「中央値レートが設計範囲の中央 75 Hz に最も近い振幅」による (中央値 90.5 Hz)。
+            // 値 3 は `spontaneous_probe` が**実測前に宣言した選定規則**
+            // 「中央値レートが設計範囲の中央 75 Hz に最も近い振幅」による (中央値 88.3 Hz)。
             // 50-100 Hz は `M0_COCHLEA_DESIGN.md` §3.6 が指定した**設計側の正解**。
             //
-            // **既知の未解決 (G13 FAIL)**: 振幅 8 では 40 帯域中 10 本が無音のまま。
-            // `indiv = 1..4` の個体差倍率が 4 倍の振幅差を作り、レート応答が超線形なので
-            // 0〜251 Hz に広がる。設計の窓 50-100 Hz は 2 倍しかない。
-            // **個体差の広がりが設計の窓より広い。** 振幅 16 なら全帯域が鳴るが
-            // 中央値 335.8 Hz で設計の 3.4 倍になる。**両立する振幅は存在しない。**
-            // 個体差機構 (idx % 4) は 2026-08-25 の `ae51754` で私が足したもので、
-            // 設計書側の指定ではない。窓に合わせるには機構side を直す必要があるが、
-            // それは設計変更なので勝手にやらない。
+            // **初版 (振幅 8) の G13 FAIL は、自発発火の注入位置と個体差の軸を
+            // 直したら消えた** (無音帯域 10/40 → 0/40・全ゲート PASS)。
+            // 原因は `indiv = idx % 4` を**帯域方向**に振っていたこと。
+            // 生体の変動は**同じ場所に付く線維の間**にあり、場所の間ではない。
             spontaneous_amplitude: spontaneous_default_amplitude(),
 
             spontaneous,
@@ -570,27 +565,40 @@ impl Cochlea {
         assert!(samples.len() == SAMPLES_PER_STEP,
             "step samples must be {}", SAMPLES_PER_STEP);
 
-        // (a) 各サンプルを 20 帯域並列で処理し、包絡線を更新
+        // (a) 機械経路のみ: 各サンプルを帯域並列で処理し、包絡線を更新。
+        //     **自発発火はここに入れない** (2026-08-26 修正)。
         for &x in samples {
             for ch in 0..N_BANDS {
                 let bp_out = self.bands[ch].process(x);
-                // 聴神経 spontaneous rate: 帯域ごとの独立な決定論的ノイズを
-                // 包絡線検出器の入力に足す (0 のとき従来とバイト同一)。
-                let drive = if self.spontaneous_amplitude > 0 {
-                    let indiv = 1 + (ch % SPONTANEOUS_INDIVIDUALITY) as i32;
-                    bp_out + self.spontaneous[ch].next() * self.spontaneous_amplitude * indiv
-                } else {
-                    bp_out
-                };
-                let _env = self.envelopes[ch].process(drive);
+                let _env = self.envelopes[ch].process(bp_out);
             }
         }
-        // (b) step の最後で各帯域の包絡線を圧縮して閾値判定
+        // (b) step の最後で包絡線を圧縮し、**線維のシナプスで**自発発火を足して閾値判定。
+        //
+        // 2026-08-26 修正 (軌道修正・不具合修正であって設計変更ではない):
+        //
+        // 旧: 自発発火を**包絡線検出器の入力**に注入していた。
+        //     その帯域の全線維が同じ床を共有し、しかも個体差倍率 `idx % 4` は
+        //     **帯域方向**に振られていた。
+        //
+        // 生体: 自発発火は**線維ごとのリボンシナプス**で起き、機械的な変換の下流にある。
+        //     変動は**同じ場所に付く線維の間**にあり、場所の間ではない。
+        //     そして **高自発率 ⟺ 低閾値 / 低自発率 ⟺ 高閾値** と結合している。
+        //
+        // 新: 圧縮後の値に**線維ごと独立な**ノイズを足してから閾値を見る。
+        //     `indiv` (帯域方向の個体差) は**軸が違ったので外した**。
+        //     自発率と閾値の逆相関は、**同じノイズ振幅に対して閾値が違えば
+        //     自動的に生じる**ので、上から与えない (原理5 創発性)。
         let mut output = [0i32; N_BANDS];
         for ch in 0..N_BANDS {
             let env = self.envelopes[ch].env;
             let compressed = compress_sqrt(env);
-            if self.fire_gens[ch].process(compressed) {
+            let drive = if self.spontaneous_amplitude > 0 {
+                compressed + self.spontaneous[ch].next() * self.spontaneous_amplitude
+            } else {
+                compressed
+            };
+            if self.fire_gens[ch].process(drive) {
                 output[ch] = FIRE_CURRENT;
             }
         }
@@ -1134,11 +1142,10 @@ mod tests {
         assert!(fires_on > 0,
             "既定では無音でも自発発火するはず (M0 が担当する設計), got {}", fires_on);
 
-        // (3) **既知の未解決 (G13 FAIL)**: 振幅 8 では全帯域は鳴らない。
-        // 個体差倍率 idx%4 (1..4) が 4 倍の振幅差を作り、レート応答が超線形なので
-        // 最弱クラスが閾値に届かない。40 帯域中 10 本が無音のまま。
-        // 設計の窓 50-100 Hz と個体差の広がりが両立しないことの帰結であり、
-        // **ここで隠さずに固定しておく**。直すには個体差機構側の設計変更が要る。
+        // (3) **全帯域が自発発火する (G13)**。
+        // 初版 (振幅 8・包絡線に注入・帯域方向の個体差) では 40 中 10 本が無音だった。
+        // 注入位置を線維シナプスへ移し、軸違いの個体差を外したら 0 になった。
+        // ここで固定して、軸や注入位置が戻ったら気づけるようにする。
         let mut sounding = vec![false; N_BANDS];
         let mut c3 = Cochlea::new();
         for _ in 0..2000 {
@@ -1148,8 +1155,8 @@ mod tests {
             }
         }
         let silent = sounding.iter().filter(|&&b| !b).count();
-        assert_eq!(silent, 10,
-            "振幅 8 では 40 帯域中 10 本が無音のまま (G13 FAIL・既知の未解決)。\
-             変わったなら個体差機構かレート応答が動いている, got {}", silent);
+        assert_eq!(silent, 0,
+            "全 40 帯域が自発発火するはず (G13 PASS)。初版は 10 本無音だった。\
+             増えたなら注入位置か個体差の軸が戻っている, got {}", silent);
     }
 }

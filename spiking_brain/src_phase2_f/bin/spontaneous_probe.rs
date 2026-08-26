@@ -40,7 +40,7 @@ use spiking_brain::phase2_f::phoneme_synth::{synth_vowel, vowels};
 const STEPS_PER_SEC: f64 = 2000.0;
 const SILENCE_STEPS: usize = 20_000; // 10 秒
 const VOWEL_MS: f64 = 170.0;
-const AMPLITUDES: [i32; 12] = [2, 4, 6, 8, 10, 12, 16, 20, 24, 32, 48, 64];
+const AMPLITUDES: [i32; 15] = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32, 48, 64];
 /// 選定規則: 設計範囲の中央
 const TARGET_MID_HZ: f64 = 75.0;
 
