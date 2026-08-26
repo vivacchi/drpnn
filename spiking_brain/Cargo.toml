@@ -315,3 +315,7 @@ path = "src_phase2_f/bin/feature_information.rs"
 [[bin]]
 name = "kana_full_factorial"
 path = "src_phase2_f/bin/kana_full_factorial.rs"
+
+[[bin]]
+name = "transition_check"
+path = "src_phase2_f/bin/transition_check.rs"

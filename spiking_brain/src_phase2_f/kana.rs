@@ -18,14 +18,14 @@
 //! これらは CV でないので別の型にする。
 
 use super::phoneme_synth::{
-    synth_consonant_banded, synth_vowel_f0, vowels, Consonant, LfsrNoise, Vowel, SAMPLE_RATE_HZ,
+    synth_consonant_banded, synth_vowel_f0, synth_vowel_f0_glide, vowels, Consonant, LfsrNoise, Vowel, SAMPLE_RATE_HZ,
 };
 
 /// 日本語のモーラ。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Mora {
     /// 子音 + 母音 (子音なしの「あいうえお」は `Consonant::None`)
-    Cv { consonant: Consonant, vowel: Vowel },
+    Cv { consonant: Consonant, vowel: Vowel, locus: Option<[f64; 3]> },
     /// 長音「ー」: 直前のモーラの母音を 1 モーラぶん伸ばす
     Long,
     /// 促音「っ」: 無音 1 モーラ (次の子音の閉鎖に相当)
@@ -49,6 +49,56 @@ pub enum Mora {
 ///
 /// **注意**: 蝸牛の `F_MAX_HZ = 4000` なので、/s/ の 3000-8000Hz は
 /// 上の 5/8 が可測域の外にある (既知の制約・§8.1)。
+/// フォルマント遷移の ON/OFF。**同じビルドの中で対照を取るために要る。**
+///
+/// 既定 ON。`DRPNN_FORMANT_TRANSITION=0` で OFF。`set_formant_transition` で実行時にも切れる。
+/// (§14.21 の教訓: **同じビルドの OFF 対照が無いと A/B が成立しない**。
+///  自発発火のとき `DRPNN_M0_SPONTANEOUS` を足したのと同じ理由。)
+static TRANSITION: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
+
+/// 遷移が有効か。初回だけ環境変数を読む。**乱数は使わない。**
+pub fn formant_transition_enabled() -> bool {
+    use std::sync::atomic::Ordering;
+    let v = TRANSITION.load(Ordering::Relaxed);
+    if v == 2 {
+        let on = std::env::var("DRPNN_FORMANT_TRANSITION").map(|s| s != "0").unwrap_or(true);
+        TRANSITION.store(on as u8, Ordering::Relaxed);
+        return on;
+    }
+    v == 1
+}
+
+/// 遷移を実行時に切り替える (対照実験用)。
+pub fn set_formant_transition(on: bool) {
+    TRANSITION.store(on as u8, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 調音位置ごとの**フォルマント遷移の始点** (locus)。[F1, F2, F3] Hz。(2026-08-27)
+///
+/// locus theory (Delattre, Liberman & Cooper 1955) の代表値。
+/// 子音の調音位置は、**後続母音のフォルマントがどこから動き出すか**に転写される。
+///
+/// **F1 が全ての阻害音で低いのは閉鎖そのものの帰結**であり (狭めが強いほど F1 は下がる)、
+/// 位置によらない。したがって **F1 の遷移は調音方法を、F2 の遷移は調音位置を運ぶ。**
+///
+/// `None` = 遷移なし。/h/ は声門摩擦音で**後続母音の声道形状をそのまま使う**
+/// (無声化した母音に等しい) ので locus を持たない。**これは音声学的に正しい。**
+/// (ひ [çi]・ふ [ɸɯ] が実際には硬口蓋・両唇であることは、は行を 'h' 一つに畳んでいる
+///  既存の単純化の側の問題であって、ここでは触らない。)
+fn locus_of(row: char) -> Option<[f64; 3]> {
+    if !formant_transition_enabled() {
+        return None;
+    }
+    match row {
+        'p' | 'b' | 'm' => Some([250.0, 750.0, 2100.0]),                 // 両唇
+        'w' => Some([250.0, 600.0, 2100.0]),                             // 両唇軟口蓋 (F2 最低)
+        't' | 'd' | 'n' | 's' | 'z' | 'c' | 'r' => Some([250.0, 1750.0, 2700.0]), // 歯茎
+        'k' | 'g' => Some([250.0, 2200.0, 2400.0]),                      // 軟口蓋 (velar pinch)
+        'S' | 'Z' | 'C' | 'y' => Some([250.0, 2600.0, 3000.0]),          // 硬口蓋
+        _ => None,                                                        // 声門 /h/・母音単独
+    }
+}
+
 fn consonant_of(row: char) -> Consonant {
     match row {
         // 2026-08-27: **有声/無声を分離した (軌道修正)**。
@@ -165,9 +215,9 @@ pub fn moras_from_kana(s: &str) -> (Vec<Mora>, usize) {
                     'ゅ' => 2,
                     _ => 4,
                 };
-                if let Some(Mora::Cv { consonant, .. }) = out.last().copied() {
+                if let Some(Mora::Cv { consonant, locus, .. }) = out.last().copied() {
                     let n = out.len();
-                    out[n - 1] = Mora::Cv { consonant, vowel: vowel_of(v) };
+                    out[n - 1] = Mora::Cv { consonant, vowel: vowel_of(v), locus };
                 } else {
                     skipped += 1;
                 }
@@ -176,6 +226,7 @@ pub fn moras_from_kana(s: &str) -> (Vec<Mora>, usize) {
                 Some((row, vi)) => out.push(Mora::Cv {
                     consonant: consonant_of(row),
                     vowel: vowel_of(vi),
+                    locus: locus_of(row),
                 }),
                 None => skipped += 1,
             },
@@ -202,10 +253,12 @@ pub fn synth_utterance(moras: &[Mora], f0_hz: f64, noise: &mut LfsrNoise) -> Vec
     let mut last_vowel: Option<Vowel> = None;
     for m in moras {
         match *m {
-            Mora::Cv { consonant, vowel } => {
+            Mora::Cv { consonant, vowel, locus } => {
                 if consonant != Consonant::None {
                     out.extend(synth_consonant_banded(consonant, CONSONANT_MS, f0_hz, noise));
-                    out.extend(synth_vowel_f0(&vowel, f0_hz, MORA_MS - CONSONANT_MS));
+                    // **フォルマント遷移** (2026-08-27): 子音の調音位置を後続母音の
+                    // フォルマントの動きに転写する。`locus` が None なら従来と同一波形。
+                    out.extend(synth_vowel_f0_glide(&vowel, f0_hz, MORA_MS - CONSONANT_MS, locus));
                 } else {
                     out.extend(synth_vowel_f0(&vowel, f0_hz, MORA_MS));
                 }

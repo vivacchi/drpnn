@@ -236,6 +236,18 @@ impl FormantResonator {
         }
     }
 
+    /// **状態 (y1,y2) を保ったまま中心周波数だけ差し替える** (2026-08-27)。
+    ///
+    /// フォルマント遷移のために必要。`new` を呼び直すと状態が 0 に戻り、
+    /// 共鳴が毎サンプル切れて**別の音**になってしまう。
+    /// 係数の算出式は `new` と同一 (重複を避けるため `new` から係数だけ借りる)。
+    pub fn retune(&mut self, f_hz: f64, bw_hz: f64, peak_gain: f64, sample_rate: f64) {
+        let fresh = Self::new(f_hz, bw_hz, peak_gain, sample_rate);
+        self.a1 = fresh.a1;
+        self.a2 = fresh.a2;
+        self.g = fresh.g;
+    }
+
     #[inline]
     pub fn process(&mut self, x: i32) -> i32 {
         let num: i64 = (self.g as i64) * (x as i64);
@@ -293,14 +305,50 @@ pub fn glottal_pulse_train(f0_hz: f64, n_samples: usize, amplitude: i32) -> Vec<
 ///     **音程を変えても包絡は動かない**ので、同じ母音として読めるはず。
 ///
 /// `synth_vowel` は**変更しない** (過去ログとの比較の連続性)。
+/// フォルマント遷移の長さ。子音の解放から母音の定常状態に達するまで。
+///
+/// 実音声では 40-60ms 程度 (Delattre, Liberman & Cooper 1955)。
+pub const TRANSITION_MS: f64 = 40.0;
+
+/// `synth_vowel_f0_glide` に `None` を渡すのと同じ。**既存の呼び出しは一切変わらない。**
 pub fn synth_vowel_f0(vowel: &Vowel, f0_hz: f64, duration_ms: f64) -> Vec<i32> {
+    synth_vowel_f0_glide(vowel, f0_hz, duration_ms, None)
+}
+
+/// **フォルマント遷移つきの母音合成** (2026-08-27)。
+///
+/// `locus_hz` = 直前の子音の調音位置が決める遷移の**始点** [F1, F2, F3]。
+/// `None` なら遷移なし = 従来と**完全に同一の波形**。
+///
+/// ## なぜ必要か
+///
+/// §14.26 で「連続にすると有声性が崩壊する (76.8% -> 3.3%)」が出た。
+/// 本実装の子音の手がかりは**子音区間の中にしか無い**ので、
+/// 直前の母音に埋もれると何も残らない。
+///
+/// 実音声では、子音の調音位置は**後続母音のフォルマントの動き**に転写される
+/// (locus theory)。**遷移は文脈でしか存在しない手がかり**であり、
+/// 本実装に無かったものである (旧コメント「遷移は未実装」がそれを認めていた)。
+///
+/// ## 何が動くか
+///
+/// 3 つの共鳴器の中心周波数を locus から母音の目標値へ**線形に**動かす
+/// (`TRANSITION_MS` かけて)。帯域幅・利得は動かさない。
+/// **RMS 正規化は `synth_vowel` を基準にしており locus に依存しない**ので、
+/// 遷移の有無で音量は変わらない = 音量では当てられない。
+pub fn synth_vowel_f0_glide(
+    vowel: &Vowel,
+    f0_hz: f64,
+    duration_ms: f64,
+    locus_hz: Option<[f64; 3]>,
+) -> Vec<i32> {
     let n_samples = (duration_ms * SAMPLE_RATE_HZ / 1000.0) as usize;
     // 声帯源。共鳴器のピーク利得で振幅を作るので、源は控えめにする。
     let source = glottal_pulse_train(f0_hz, n_samples, 4096);
     let mut resonators: Vec<FormantResonator> = (0..3)
         .map(|k| {
             FormantResonator::new(
-                vowel.formants_hz[k],
+                match locus_hz { Some(l) => l[k], None => vowel.formants_hz[k] },
                 vowel.bandwidths_hz[k],
                 vowel.amplitudes[k] as f64 / 4096.0,
                 SAMPLE_RATE_HZ,
@@ -308,7 +356,24 @@ pub fn synth_vowel_f0(vowel: &Vowel, f0_hz: f64, duration_ms: f64) -> Vec<i32> {
         })
         .collect();
     let mut voiced = Vec::with_capacity(n_samples);
-    for &x in source.iter() {
+    // 遷移の長さ (サンプル数)。母音が短ければそれに収める。
+    let n_trans = ((TRANSITION_MS * SAMPLE_RATE_HZ / 1000.0) as usize).min(n_samples);
+    for (i, &x) in source.iter().enumerate() {
+        if let Some(locus) = locus_hz {
+            if i < n_trans && n_trans > 0 {
+                // locus -> 目標値 への線形移動。i = n_trans で目標値に一致する。
+                for (k, r) in resonators.iter_mut().enumerate() {
+                    let target = vowel.formants_hz[k];
+                    let f = locus[k] + (target - locus[k]) * (i as f64) / (n_trans as f64);
+                    r.retune(
+                        f,
+                        vowel.bandwidths_hz[k],
+                        vowel.amplitudes[k] as f64 / 4096.0,
+                        SAMPLE_RATE_HZ,
+                    );
+                }
+            }
+        }
         let mut sample = 0i32;
         for r in resonators.iter_mut() {
             sample = sample.saturating_add(r.process(x));
