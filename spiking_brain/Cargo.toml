@@ -291,3 +291,7 @@ path = "src_phase2_f/bin/context_enhancement.rs"
 [[bin]]
 name = "equilibrium_measurement"
 path = "src_phase2_f/bin/equilibrium_measurement.rs"
+
+[[bin]]
+name = "kana_continuous"
+path = "src_phase2_f/bin/kana_continuous.rs"
