@@ -214,6 +214,47 @@ fn cn_counts(wave: &[i32]) -> Vec<u32> {
     counts
 }
 
+/// **2 窓版** (2026-08-27 追加)。子音区間と母音区間を分けて数える。
+///
+/// ## なぜ要るか
+///
+/// §14.23.4 で「有声性の手がかりはモーラの先頭に時間的に局在しているのに、
+/// 240 step を 1 本のベクトルに畳んでいるので埋もれる」と記録した。
+///
+/// 手がかりの大きさ: 閉鎖区間 20ms (モーラ 120ms の **17%**) × 帯域 1〜6
+/// (40 本中 **6 本**) ≒ **ベクトルの 2.5%**。残りは母音が占める。
+///
+/// §14.9 では 2 窓に割ると線形プローブが 8.9% → 13.9%、置換最大との差が
+/// 0 → +14 件になった。**同じ手当てを同定率でやる。**
+///
+/// ## 窓の境界
+///
+/// `CONSONANT_STEPS = 60` = 子音長 30ms ÷ 0.5ms。
+/// **閉鎖 (voice bar だけが鳴る区間) は step 0-39** (子音区間の前 2/3) にあるので、
+/// この境界で割れば有声性の手がかりが第 1 窓に集まる。
+///
+/// **境界は合成器の定数から決まる値であって、結果を見て選んだものではない。**
+/// ただし **M1 が持てない分節知識**であることは記録しておく (§14.9 の監査で指摘された点)。
+fn cn_counts_windowed(wave: &[i32]) -> Vec<u32> {
+    const CONSONANT_STEPS: usize = 60;
+    let mut co = Cochlea::new();
+    let mut cn = CochlearNucleus::new();
+    let mut counts = vec![0u32; 2 * N_CN_OUTPUT];
+    for (step, chunk) in wave.chunks(SAMPLES_PER_STEP).enumerate() {
+        if chunk.len() < SAMPLES_PER_STEP {
+            break;
+        }
+        let w = if step < CONSONANT_STEPS { 0 } else { 1 };
+        let out = co.process_step(chunk);
+        for (i, &v) in cn.process_step(&out).iter().enumerate() {
+            if v != 0 {
+                counts[w * N_CN_OUTPUT + i] += 1;
+            }
+        }
+    }
+    counts
+}
+
 fn cosine(a: &[u32], b: &[u32]) -> f64 {
     let dot: f64 = a.iter().zip(b.iter()).map(|(&x, &y)| x as f64 * y as f64).sum();
     let na: f64 = a.iter().map(|&x| (x as f64).powi(2)).sum::<f64>().sqrt();
@@ -437,8 +478,35 @@ fn main() {
             main_conds.push((k, cn_counts(&wave_of(kana, f0, utterance_seed(k, v), 1, 1))));
         }
     }
-    let main_result = report("話者の言い直し (F0 100-200Hz + 雑音実現が条件ごとに全て異なる) [主軸]",
+    let main_result = report("話者の言い直し (F0 100-200Hz + 雑音実現が条件ごとに全て異なる) [主軸・時間平均]",
                              F0S.len(), &main_conds);
+
+    // --- 主軸を 2 窓で測り直す (2026-08-27 追加) ---
+    //
+    // §14.23.4: 有声性の手がかりは**モーラの先頭に時間的に局在**しているのに、
+    // 240 step を 1 本に畳んでいるので埋もれる (ベクトルの約 2.5%)。
+    // §14.9 では 2 窓で線形プローブが 8.9% → 13.9% になった。**同じ手当てを同定率で。**
+    //
+    // **ゲート (実測前に固定)**: 2 窓の**合成子音の同定率**が時間平均より上がるか。
+    // *時間を潰していたことが原因なら上がるはず。上がらなければ別の理由。*
+    // **数値は置かない。方向だけ。**
+    let mut main_win: Vec<(usize, Vec<u32>)> = Vec::new();
+    for (k, &(kana, _, _, _)) in LABELS.iter().enumerate() {
+        for (v, &f0) in F0S.iter().enumerate() {
+            main_win.push((k, cn_counts_windowed(&wave_of(kana, f0, utterance_seed(k, v), 1, 1))));
+        }
+    }
+    let main_win_result = report("話者の言い直し [主軸・**2窓** (子音区間 / 母音区間)]",
+                                 F0S.len(), &main_win);
+    println!();
+    println!("  === 時間平均 vs 2窓 (主軸) ===");
+    println!("    かなの同定     : {:>5.1}% -> {:>5.1}%  ({:+.1}pt)",
+             main_result.kana, main_win_result.kana, main_win_result.kana - main_result.kana);
+    println!("    母音列の同定   : {:>5.1}% -> {:>5.1}%  ({:+.1}pt)",
+             main_result.vowel, main_win_result.vowel, main_win_result.vowel - main_result.vowel);
+    println!("    **合成子音**   : {:>5.1}% -> {:>5.1}%  ({:+.1}pt)  -> {}",
+             main_result.cons, main_win_result.cons, main_win_result.cons - main_result.cons,
+             if main_win_result.cons > main_result.cons { "**上がった**" } else { "**上がらなかった**" });
 
     // --- 副軸: F0 のみ (雑音実現は固定) ---
     let mut f0_conds: Vec<(usize, Vec<u32>)> = Vec::new();
@@ -504,6 +572,45 @@ fn main() {
     println!("  全問正解 ({} 音): {}", full.len(), full.join(""));
     println!("  1 回でも当たった ({} 音): {}", some.len(), some.join(""));
     println!("  一度も当たらない ({} 音): {}", zero.len(), zero.join(""));
+
+    // --- かなごとの成否 (主軸・2窓) ---
+    //
+    // **決定的な確認**: §14.23.3 で「濁音は 1 音も当たらない」と記録した。
+    // 時間を潰していたことが原因なら、2 窓で濁音が当たるようになるはず。
+    println!();
+    println!("--- 主軸・**2窓** でかなごとに何回当たったか (4 回中) ---");
+    let mut per_win = vec![0usize; LABELS.len()];
+    for i in 0..main_win.len() {
+        if let Some(p) = predict(&main_win, i, &l_kana) {
+            if p == main_win[i].0 {
+                per_win[main_win[i].0] += 1;
+            }
+        }
+    }
+    for (k, &(kana, row, _, _)) in LABELS.iter().enumerate() {
+        let mark = match per_win[k] { 4 => "4", 3 => "3", 2 => "2", 1 => "1", _ => "." };
+        print!("{}{} ", kana, mark);
+        if row == "ん" || (k + 1) % 5 == 0 {
+            println!();
+        }
+    }
+    println!("  (数字 = 4 回中の正解数・. = 0 回)");
+    let some_w: Vec<&str> = LABELS.iter().enumerate().filter(|(k, _)| per_win[*k] > 0).map(|(_, l)| l.0).collect();
+    println!("  1 回でも当たった ({} 音): {}", some_w.len(), some_w.join(""));
+    // 濁音・半濁音だけを取り出す (LABELS の 46 番目以降)
+    let voiced_hit: Vec<&str> = LABELS.iter().enumerate().skip(46)
+        .filter(|(k, _)| per_win[*k] > 0).map(|(_, l)| l.0).collect();
+    let voiced_hit_flat: Vec<&str> = LABELS.iter().enumerate().skip(46)
+        .filter(|(k, _)| per_kana[*k] > 0).map(|(_, l)| l.0).collect();
+    println!();
+    println!("  === **濁音・半濁音 23 音のうち当たった数** ===");
+    println!("    時間平均: {} 音  {}", voiced_hit_flat.len(),
+             if voiced_hit_flat.is_empty() { "(なし)".to_string() } else { voiced_hit_flat.join("") });
+    println!("    **2窓**  : {} 音  {}", voiced_hit.len(),
+             if voiced_hit.is_empty() { "(なし)".to_string() } else { voiced_hit.join("") });
+    println!("    -> {}", if voiced_hit.len() > voiced_hit_flat.len() {
+        "**2窓で濁音が当たるようになった = 時間を潰していたことが原因だった**"
+    } else { "**2窓にしても濁音は当たらない = 原因は時間の潰しではない**" });
 
     // --- G68d 決定論性 ---
     println!();
