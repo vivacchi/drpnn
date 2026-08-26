@@ -319,3 +319,7 @@ path = "src_phase2_f/bin/kana_full_factorial.rs"
 [[bin]]
 name = "transition_check"
 path = "src_phase2_f/bin/transition_check.rs"
+
+[[bin]]
+name = "corpus_run"
+path = "src_phase2_f/bin/corpus_run.rs"
