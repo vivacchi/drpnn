@@ -311,3 +311,7 @@ path = "src_phase2_f/bin/voicing_check.rs"
 [[bin]]
 name = "feature_information"
 path = "src_phase2_f/bin/feature_information.rs"
+
+[[bin]]
+name = "kana_full_factorial"
+path = "src_phase2_f/bin/kana_full_factorial.rs"
