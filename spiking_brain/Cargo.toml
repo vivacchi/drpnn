@@ -271,3 +271,11 @@ path = "src_phase2_f/bin/m0_bare_vs_current.rs"
 [[bin]]
 name = "equilibrium_vs_input"
 path = "src_phase2_f/bin/equilibrium_vs_input.rs"
+
+[[bin]]
+name = "equilibrium_vs_input_v2"
+path = "src_phase2_f/bin/equilibrium_vs_input_v2.rs"
+
+[[bin]]
+name = "fiber_population"
+path = "src_phase2_f/bin/fiber_population.rs"

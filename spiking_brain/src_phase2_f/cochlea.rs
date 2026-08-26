@@ -476,6 +476,23 @@ impl SpontaneousLfsr {
 /// (high-SR / medium-SR / low-SR fiber)。帯域ごとに決定論的に割り当てる。
 pub const SPONTANEOUS_INDIVIDUALITY: usize = 4;
 
+/// M0 自発発火の既定振幅 (2026-08-26 ユーザー決定で 0 → 8)。
+///
+/// **計測用ノブ**: 環境変数 `DRPNN_M0_SPONTANEOUS` で上書きできる。
+/// これは対照アームを**同一ビルドで**取るために要る。
+/// 2026-08-26 の回帰チェックで「OFF アームが無いので、観測された差を
+/// 自発発火 ON に帰属できない」と指摘されて追加した。
+/// 既定はあくまでこの定数であり、env は測定のためだけに使う。
+pub const SPONTANEOUS_DEFAULT_AMPLITUDE: i32 = 8;
+
+/// 既定振幅を返す (env による上書きを含む)。構築時に一度だけ読む。
+pub fn spontaneous_default_amplitude() -> i32 {
+    std::env::var("DRPNN_M0_SPONTANEOUS")
+        .ok()
+        .and_then(|v| v.parse::<i32>().ok())
+        .unwrap_or(SPONTANEOUS_DEFAULT_AMPLITUDE)
+}
+
 /// 設計が指定する自発発火率の範囲 [Hz] (M0_COCHLEA_DESIGN.md §3.6)。
 /// **この値は設計側にある正解であって、こちらで決めた閾値ではない。**
 pub const SPONTANEOUS_RATE_TARGET_HZ: (f64, f64) = (50.0, 100.0);
@@ -524,7 +541,25 @@ impl Cochlea {
             envelopes,
             fire_gens,
             center_freqs,
-            spontaneous_amplitude: 0, // 既定 OFF
+            // 2026-08-26: ユーザー決定により **既定 ON**。
+            // コードのコメントは以前から「自発発火は M0 蝸牛が担当する設計に」と
+            // 言っていたが、M0 側が既定 OFF・M1 入力層も 0 (§14.4 の③で消した) で、
+            // **担当がどちらにも無い状態**になっていた。M0 に担当させる。
+            //
+            // 値 8 は `spontaneous_probe` が**実測前に宣言した選定規則**
+            // 「中央値レートが設計範囲の中央 75 Hz に最も近い振幅」による (中央値 90.5 Hz)。
+            // 50-100 Hz は `M0_COCHLEA_DESIGN.md` §3.6 が指定した**設計側の正解**。
+            //
+            // **既知の未解決 (G13 FAIL)**: 振幅 8 では 40 帯域中 10 本が無音のまま。
+            // `indiv = 1..4` の個体差倍率が 4 倍の振幅差を作り、レート応答が超線形なので
+            // 0〜251 Hz に広がる。設計の窓 50-100 Hz は 2 倍しかない。
+            // **個体差の広がりが設計の窓より広い。** 振幅 16 なら全帯域が鳴るが
+            // 中央値 335.8 Hz で設計の 3.4 倍になる。**両立する振幅は存在しない。**
+            // 個体差機構 (idx % 4) は 2026-08-25 の `ae51754` で私が足したもので、
+            // 設計書側の指定ではない。窓に合わせるには機構side を直す必要があるが、
+            // それは設計変更なので勝手にやらない。
+            spontaneous_amplitude: spontaneous_default_amplitude(),
+
             spontaneous,
         }
     }
@@ -675,11 +710,11 @@ mod tests {
     ///
     /// 実装はしたが、`FireGenerator` が閾値+不応期の装置なのでレートが
     /// 0Hz か 400Hz にしかならず、設計書 §3.6 の「50-100Hz」を満たせない (S9)。
-    /// 有効化するときは `spontaneous_amplitude` を明示的に設定すること。
+    /// 2026-08-26 にユーザー決定で既定 ON (振幅 8) になった。無効化は 0 を設定する。
     #[test]
-    fn cochlea_spontaneous_defaults_off() {
+    fn cochlea_spontaneous_defaults_on() {
         let c = Cochlea::new();
-        assert_eq!(c.spontaneous_amplitude, 0, "蝸牛の自発発火は既定 OFF");
+        assert_eq!(c.spontaneous_amplitude, spontaneous_default_amplitude(), "蝸牛の自発発火は既定 ON");
         assert_eq!(c.spontaneous.len(), N_BANDS, "ノイズ源が帯域数だけ無い");
         // 種が帯域ごとに違うこと (同期しないことの保証)
         let seeds: std::collections::HashSet<u16> =
@@ -1066,16 +1101,55 @@ mod tests {
 
     #[test]
     fn cochlea_silence_no_firing() {
-        let mut c = Cochlea::new();
-        // 無音 (zero) を入れて 100 step 動かす
+        // 2026-08-26: **この不変条件は意図的に変わった。**
+        //
+        // 旧: 「無音では発火しない (自発発火は M0 内では生成しない)」
+        // 新: 自発発火は M0 蝸牛が担当する (ユーザー決定・既定 ON・振幅 8)。
+        //     よって**無音でも発火する**。それが正しい挙動である。
+        //
+        // ただし**元の保証は捨てない**。機械的な経路 (biquad → 包絡 → 発火) が
+        // 無音入力に対して発火しないことは、自発発火を切れば今も成り立つ。
+        // 2 つを分けて確かめる。
         let zero = vec![0i32; SAMPLES_PER_STEP];
-        let mut total_fires = 0u32;
+
+        // (1) 自発発火を切ると、機械的な経路は無音で発火しない (元の保証)
+        let mut off = Cochlea::new();
+        off.spontaneous_amplitude = 0;
+        let mut fires_off = 0u32;
         for _ in 0..100 {
-            let out = c.process_step(&zero);
-            total_fires += out.iter().filter(|&&v| v > 0).count() as u32;
+            let out = off.process_step(&zero);
+            fires_off += out.iter().filter(|&&v| v > 0).count() as u32;
         }
-        // 無音では発火しない (自発発火は M0 内では生成しない)
-        assert_eq!(total_fires, 0,
-            "silence should produce no firing, got {}", total_fires);
+        assert_eq!(fires_off, 0,
+            "自発発火を切れば無音で発火しないはず (機械経路の保証), got {}", fires_off);
+
+        // (2) 既定 (自発発火 ON) では、無音でも発火する
+        let mut on = Cochlea::new();
+        assert_eq!(on.spontaneous_amplitude, spontaneous_default_amplitude(), "既定は自発発火 ON");
+        let mut fires_on = 0u32;
+        for _ in 0..100 {
+            let out = on.process_step(&zero);
+            fires_on += out.iter().filter(|&&v| v > 0).count() as u32;
+        }
+        assert!(fires_on > 0,
+            "既定では無音でも自発発火するはず (M0 が担当する設計), got {}", fires_on);
+
+        // (3) **既知の未解決 (G13 FAIL)**: 振幅 8 では全帯域は鳴らない。
+        // 個体差倍率 idx%4 (1..4) が 4 倍の振幅差を作り、レート応答が超線形なので
+        // 最弱クラスが閾値に届かない。40 帯域中 10 本が無音のまま。
+        // 設計の窓 50-100 Hz と個体差の広がりが両立しないことの帰結であり、
+        // **ここで隠さずに固定しておく**。直すには個体差機構側の設計変更が要る。
+        let mut sounding = vec![false; N_BANDS];
+        let mut c3 = Cochlea::new();
+        for _ in 0..2000 {
+            let out = c3.process_step(&zero);
+            for (i, &v) in out.iter().enumerate() {
+                if v > 0 { sounding[i] = true; }
+            }
+        }
+        let silent = sounding.iter().filter(|&&b| !b).count();
+        assert_eq!(silent, 10,
+            "振幅 8 では 40 帯域中 10 本が無音のまま (G13 FAIL・既知の未解決)。\
+             変わったなら個体差機構かレート応答が動いている, got {}", silent);
     }
 }
