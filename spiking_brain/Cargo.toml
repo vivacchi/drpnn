@@ -263,3 +263,7 @@ path = "src_phase2_f/bin/where_is_the_information.rs"
 [[bin]]
 name = "synapse_equilibrium"
 path = "src_phase2_f/bin/synapse_equilibrium.rs"
+
+[[bin]]
+name = "m0_bare_vs_current"
+path = "src_phase2_f/bin/m0_bare_vs_current.rs"
