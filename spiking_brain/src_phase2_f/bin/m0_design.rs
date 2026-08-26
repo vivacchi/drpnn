@@ -39,7 +39,7 @@ use spiking_brain::phase2_f::cochlea::{
     compress_sqrt, erb_q_factor, erb_spaced_freqs, BandpassBiquad, EnvelopeDetector,
     FireGenerator, ENV_LEAK_SHIFT, FIRE_REFRACTORY_STEPS, F_MAX_HZ, F_MIN_HZ, SAMPLES_PER_STEP,
 };
-use spiking_brain::phase2_f::phoneme_synth::{
+use spiking_brain::phase2_f::phoneme_synth::{F0_DEFAULT_HZ, 
     freq_to_phase_step, sin_lookup, standard_syllables, synth_consonant_banded, synth_vowel,
     vowels, Consonant, LfsrNoise, SAMPLE_RATE_HZ,
 };
@@ -252,14 +252,14 @@ fn measure_cheap(freqs: &[f64], q: f64, thr: i32) -> R {
         .iter()
         .map(|s| {
             let mut no = LfsrNoise::new(SEED);
-            fired_bands(&synth_consonant_banded(s.consonant, CONSONANT_MS, &mut no), freqs, q, thr)
+            fired_bands(&synth_consonant_banded(s.consonant, CONSONANT_MS, F0_DEFAULT_HZ, &mut no), freqs, q, thr)
         })
         .collect();
     let (mut ch_hit, mut ch_den, mut cph, mut cpt) = (0usize, 0usize, 0usize, 0usize);
     for (k, s) in syls.iter().enumerate() {
         let tgt: Vec<usize> = match s.consonant {
-            Consonant::Plosive { burst_freq_low: lo, burst_freq_high: hi }
-            | Consonant::Fricative { freq_low: lo, freq_high: hi } => {
+            Consonant::Plosive { burst_freq_low: lo, burst_freq_high: hi, .. }
+            | Consonant::Fricative { freq_low: lo, freq_high: hi, .. } => {
                 (0..n).filter(|&i| freqs[i] >= lo && freqs[i] <= hi).collect()
             }
             Consonant::Nasal { f1, f2 } => {

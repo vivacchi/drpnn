@@ -69,7 +69,7 @@
 use spiking_brain::phase2_f::cochlea::{Cochlea, N_BANDS, SAMPLES_PER_STEP};
 use spiking_brain::phase2_f::cochlear_nucleus::{CochlearNucleus, N_CN_OUTPUT};
 use spiking_brain::phase2_f::kana::{moras_from_kana, synth_utterance};
-use spiking_brain::phase2_f::phoneme_synth::{synth_consonant_banded, Consonant, LfsrNoise};
+use spiking_brain::phase2_f::phoneme_synth::{F0_DEFAULT_HZ, synth_consonant_banded, Consonant, LfsrNoise};
 
 const KANA: &[&str] = &[
     "あ","い","う","え","お","か","き","く","け","こ","さ","し","す","せ","そ",
@@ -84,10 +84,10 @@ const CHECKPOINTS: [usize; 7] = [1, 2, 5, 10, 20, 50, 100];
 
 fn consonants() -> Vec<(&'static str, Consonant)> {
     vec![
-        ("pa", Consonant::Plosive { burst_freq_low: 500.0, burst_freq_high: 2000.0 }),
-        ("tu", Consonant::Plosive { burst_freq_low: 1500.0, burst_freq_high: 3500.0 }),
-        ("ki", Consonant::Plosive { burst_freq_low: 2000.0, burst_freq_high: 4000.0 }),
-        ("se", Consonant::Fricative { freq_low: 3000.0, freq_high: 8000.0 }),
+        ("pa", Consonant::Plosive { burst_freq_low: 500.0, burst_freq_high: 2000.0, voiced: false }),
+        ("tu", Consonant::Plosive { burst_freq_low: 1500.0, burst_freq_high: 3500.0, voiced: false }),
+        ("ki", Consonant::Plosive { burst_freq_low: 2000.0, burst_freq_high: 4000.0, voiced: false }),
+        ("se", Consonant::Fricative { freq_low: 3000.0, freq_high: 8000.0, voiced: false }),
     ]
 }
 
@@ -139,7 +139,7 @@ fn run() -> Vec<Row> {
     let silence = vec![0i32; (FLOOR_MS * 16000.0 / 1000.0) as usize];
     let cons_waves: Vec<Vec<i32>> = cs.iter().map(|&(_, c)| {
         let mut n = LfsrNoise::new(SEED);
-        synth_consonant_banded(c, CONSONANT_MS, &mut n)
+        synth_consonant_banded(c, CONSONANT_MS, F0_DEFAULT_HZ, &mut n)
     }).collect();
 
     let mut co = Cochlea::new();
@@ -217,7 +217,7 @@ fn main() {
         let mut c = Vec::new();
         for &(_, cons) in cs.iter() {
             let mut n = LfsrNoise::new(SEED);
-            let w = synth_consonant_banded(cons, CONSONANT_MS, &mut n);
+            let w = synth_consonant_banded(cons, CONSONANT_MS, F0_DEFAULT_HZ, &mut n);
             // **毎回まっさら** = consonant_probe / kana_identify と同じ条件
             let mut co = Cochlea::new();
             let mut cn = CochlearNucleus::new();

@@ -45,7 +45,7 @@ use spiking_brain::phase2_f::cochlea::{
     erb_q_factor, erb_spaced_freqs, BandpassBiquad, Cochlea, EnvelopeDetector, FireGenerator,
     ENV_LEAK_SHIFT, FIRE_REFRACTORY_STEPS, FIRE_THRESHOLD, F_MIN_HZ, N_BANDS, SAMPLES_PER_STEP,
 };
-use spiking_brain::phase2_f::phoneme_synth::{
+use spiking_brain::phase2_f::phoneme_synth::{F0_DEFAULT_HZ, 
     standard_syllables, synth_consonant_banded, synth_vowel, vowels, LfsrNoise, SAMPLE_RATE_HZ,
 };
 
@@ -117,7 +117,7 @@ struct Cell {
 fn measure(gain: i32, f_max: f64) -> Cell {
     let se_c = standard_syllables()[3].consonant;
     let mut n = LfsrNoise::new(SEED);
-    let se = band_spikes(&synth_consonant_banded(se_c, CONSONANT_MS, &mut n), f_max, gain);
+    let se = band_spikes(&synth_consonant_banded(se_c, CONSONANT_MS, F0_DEFAULT_HZ, &mut n), f_max, gain);
 
     let profiles: Vec<[u32; N_BANDS]> = vowels()
         .iter()

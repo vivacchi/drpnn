@@ -49,7 +49,7 @@ use spiking_brain::phase2_f::cochlea::{
     erb_q_factor, erb_spaced_freqs, BandpassBiquad, Cochlea, EnvelopeDetector, FireGenerator,
     ENV_LEAK_SHIFT, FIRE_REFRACTORY_STEPS, FIRE_THRESHOLD, F_MIN_HZ, N_BANDS, SAMPLES_PER_STEP,
 };
-use spiking_brain::phase2_f::phoneme_synth::{
+use spiking_brain::phase2_f::phoneme_synth::{F0_DEFAULT_HZ, 
     standard_syllables, synth_consonant_banded, synth_vowel, vowels, Consonant, LfsrNoise,
     SAMPLE_RATE_HZ,
 };
@@ -95,11 +95,11 @@ fn band_spikes(wave: &[i32], f_max: f64, gain: i32) -> [u32; N_BANDS] {
 /// 併せて指定帯域**外**で応答した帯域数も返す (誤応答の可視化)。
 fn fricative_coverage(f_max: f64, gain: i32, seed: u16) -> (usize, usize, usize) {
     let (lo, hi) = match standard_syllables()[3].consonant {
-        Consonant::Fricative { freq_low, freq_high } => (freq_low, freq_high),
+        Consonant::Fricative { freq_low, freq_high, .. } => (freq_low, freq_high),
         _ => unreachable!("se は摩擦音のはず"),
     };
     let mut n = LfsrNoise::new(seed);
-    let wave = synth_consonant_banded(standard_syllables()[3].consonant, CONSONANT_MS, &mut n);
+    let wave = synth_consonant_banded(standard_syllables()[3].consonant, CONSONANT_MS, F0_DEFAULT_HZ, &mut n);
     let counts = band_spikes(&wave, f_max, gain);
     let freqs = erb_spaced_freqs(F_MIN_HZ, f_max, N_BANDS);
     let in_band: Vec<usize> = (0..N_BANDS).filter(|&i| freqs[i] >= lo && freqs[i] <= hi).collect();

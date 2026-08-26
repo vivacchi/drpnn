@@ -60,7 +60,7 @@
 
 use spiking_brain::phase2_f::cochlea::{Cochlea, N_BANDS, SAMPLES_PER_STEP};
 use spiking_brain::phase2_f::cochlear_nucleus::{CochlearNucleus, N_CN_OUTPUT};
-use spiking_brain::phase2_f::phoneme_synth::{
+use spiking_brain::phase2_f::phoneme_synth::{F0_DEFAULT_HZ, 
     synth_consonant_banded, synth_vowel, vowels, Consonant, LfsrNoise,
 };
 
@@ -132,10 +132,10 @@ fn centroid(counts: &[f64], freqs: &[f64]) -> f64 {
 
 fn consonants() -> Vec<(&'static str, Consonant)> {
     vec![
-        ("pa", Consonant::Plosive { burst_freq_low: 500.0, burst_freq_high: 2000.0 }),
-        ("tu", Consonant::Plosive { burst_freq_low: 1500.0, burst_freq_high: 3500.0 }),
-        ("ki", Consonant::Plosive { burst_freq_low: 2000.0, burst_freq_high: 4000.0 }),
-        ("se", Consonant::Fricative { freq_low: 3000.0, freq_high: 8000.0 }),
+        ("pa", Consonant::Plosive { burst_freq_low: 500.0, burst_freq_high: 2000.0, voiced: false }),
+        ("tu", Consonant::Plosive { burst_freq_low: 1500.0, burst_freq_high: 3500.0, voiced: false }),
+        ("ki", Consonant::Plosive { burst_freq_low: 2000.0, burst_freq_high: 4000.0, voiced: false }),
+        ("se", Consonant::Fricative { freq_low: 3000.0, freq_high: 8000.0, voiced: false }),
     ]
 }
 
@@ -263,7 +263,7 @@ fn main() {
     let mut cent5_sub = Vec::new();
     for (nm, cons) in consonants() {
         let mut noise = LfsrNoise::new(SEED);
-        let w = synth_consonant_banded(cons, CONSONANT_MS, &mut noise);
+        let w = synth_consonant_banded(cons, CONSONANT_MS, F0_DEFAULT_HZ, &mut noise);
         let c0 = m0_counts(&w, 4096, 4096);
         let c0s = subtract(&c0, &base_c_m0);
         let c5 = m05_counts(&w, 4096, 4096);

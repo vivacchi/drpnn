@@ -41,6 +41,10 @@ pub fn sin_table() -> &'static [i32; SIN_TABLE_SIZE] {
 
 /// 位相 (Q24 = 24bit 固定小数点、上 8bit がテーブルインデックス) から sin 値を取得.
 /// 線形補間あり.
+/// 子音合成で F0 を明示しないときの既定値 (2026-08-27)。
+/// voice bar の周波数に使う。無声子音では使われない。
+pub const F0_DEFAULT_HZ: f64 = 150.0;
+
 #[inline]
 pub fn sin_lookup(phase_q24: u32) -> i32 {
     let table = sin_table();
@@ -399,10 +403,21 @@ impl LfsrNoise {
 /// 子音の種類.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Consonant {
-    /// 破裂音 (例 /p/, /t/, /k/): 短い無音 + broadband burst
-    Plosive { burst_freq_low: f64, burst_freq_high: f64 },
-    /// 摩擦音 (例 /s/, /sh/): 持続的な高周波ノイズ
-    Fricative { freq_low: f64, freq_high: f64 },
+    /// 破裂音 (例 /p/, /t/, /k/, /b/, /d/, /g/): 短い無音 + broadband burst
+    ///
+    /// `voiced` (2026-08-27 追加): **前有声 (prevoicing)**。
+    /// 生体では有声破裂音の閉鎖中も声帯が振動し、声道が閉じているので
+    /// **低周波だけが組織を通って漏れる** (スペクトログラムの voice bar)。
+    /// **日本語の /b d g/ と /p t k/ を分ける主要な手がかりはこれである。**
+    ///
+    /// これを入れる前は `'k'|'g'` `'t'|'d'` `'p'|'b'` が同じ子音にマップされており、
+    /// **濁音と清音が完全に同一の波形**だった。実コーパスでは
+    /// **モーラの 41.7% がこの縮退の影響を受けていた** (§14.21)。
+    Plosive { burst_freq_low: f64, burst_freq_high: f64, voiced: bool },
+    /// 摩擦音 (例 /s/, /sh/, /z/, /ʑ/): 持続的な高周波ノイズ
+    ///
+    /// `voiced` (2026-08-27 追加): 有声摩擦音では摩擦と**同時に**声帯が振動する。
+    Fricative { freq_low: f64, freq_high: f64, voiced: bool },
     /// 鼻音 (例 /n/, /m/): 低周波フォルマント
     Nasal { f1: f64, f2: f64 },
     /// 子音なし (「あいうえお」など母音のみのかな)
@@ -436,7 +451,7 @@ pub fn synth_consonant(c: Consonant, duration_ms: f64, noise: &mut LfsrNoise) ->
     let n_samples = (duration_ms * SAMPLE_RATE_HZ / 1000.0) as usize;
     let mut out = Vec::with_capacity(n_samples);
     match c {
-        Consonant::Plosive { burst_freq_low: _, burst_freq_high: _ } => {
+        Consonant::Plosive { burst_freq_low: _, burst_freq_high: _, .. } => {
             // 10ms 無音 + 20ms broadband burst (LFSR ノイズの振幅変調)
             let silent = ((10.0 * SAMPLE_RATE_HZ / 1000.0) as usize).min(n_samples / 2);
             for _ in 0..silent {
@@ -499,7 +514,7 @@ pub fn synth_consonant(c: Consonant, duration_ms: f64, noise: &mut LfsrNoise) ->
         }
         Consonant::Affricate { burst_freq_low, burst_freq_high, .. } => {
             return synth_consonant(
-                Consonant::Plosive { burst_freq_low, burst_freq_high },
+                Consonant::Plosive { burst_freq_low, burst_freq_high, voiced: false },
                 duration_ms,
                 noise,
             );
@@ -527,22 +542,22 @@ pub fn standard_syllables() -> [Syllable; 5] {
     [
         Syllable {
             label: "pa",
-            consonant: Consonant::Plosive { burst_freq_low: 500.0, burst_freq_high: 2000.0 },
+            consonant: Consonant::Plosive { burst_freq_low: 500.0, burst_freq_high: 2000.0, voiced: false },
             vowel: v[0], // a
         },
         Syllable {
             label: "ki",
-            consonant: Consonant::Plosive { burst_freq_low: 2000.0, burst_freq_high: 4000.0 },
+            consonant: Consonant::Plosive { burst_freq_low: 2000.0, burst_freq_high: 4000.0, voiced: false },
             vowel: v[1], // i
         },
         Syllable {
             label: "tu",
-            consonant: Consonant::Plosive { burst_freq_low: 1500.0, burst_freq_high: 3500.0 },
+            consonant: Consonant::Plosive { burst_freq_low: 1500.0, burst_freq_high: 3500.0, voiced: false },
             vowel: v[2], // u
         },
         Syllable {
             label: "se",
-            consonant: Consonant::Fricative { freq_low: 3000.0, freq_high: 8000.0 },
+            consonant: Consonant::Fricative { freq_low: 3000.0, freq_high: 8000.0, voiced: false },
             vowel: v[3], // e
         },
         Syllable {
@@ -581,7 +596,7 @@ pub fn standard_syllables() -> [Syllable; 5] {
 ///
 /// **全子音を同一 RMS に揃えるので、以後に測る分離は音量差でなくスペクトル差に帰する。**
 /// これは刺激生成側の校正であり、ネットワーク側の判断機構ではない。
-pub fn synth_consonant_banded(c: Consonant, duration_ms: f64, noise: &mut LfsrNoise) -> Vec<i32> {
+pub fn synth_consonant_banded(c: Consonant, duration_ms: f64, f0_hz: f64, noise: &mut LfsrNoise) -> Vec<i32> {
     /// 帯域通過後の目標 RMS。
     ///
     /// 2026-08-25 に 5657 → 11314 (×2)。旧値は「純音 amp 8000 の RMS」だったが、
@@ -594,7 +609,7 @@ pub fn synth_consonant_banded(c: Consonant, duration_ms: f64, noise: &mut LfsrNo
     let n_samples = (duration_ms * SAMPLE_RATE_HZ / 1000.0) as usize;
 
     match c {
-        Consonant::Plosive { burst_freq_low, burst_freq_high } => {
+        Consonant::Plosive { burst_freq_low, burst_freq_high, voiced } => {
             let mut bp = band_filter(burst_freq_low, burst_freq_high);
             let mut out = Vec::with_capacity(n_samples);
             let silent = ((10.0 * SAMPLE_RATE_HZ / 1000.0) as usize).min(n_samples / 2);
@@ -606,9 +621,12 @@ pub fn synth_consonant_banded(c: Consonant, duration_ms: f64, noise: &mut LfsrNo
                 let n = bp.process(noise.next_sample());
                 out.push((n * decay) >> 10);
             }
+            // 2026-08-27: 有声なら voice bar (前有声) を重ねる。
+            // 閉鎖区間 (先頭 10ms の無音) にも乗るので、それが前有声そのものになる。
+            let out = if voiced { mix_voice_bar(out, f0_hz) } else { out };
             normalize_rms(out, TARGET_RMS)
         }
-        Consonant::Fricative { freq_low, freq_high } => {
+        Consonant::Fricative { freq_low, freq_high, voiced } => {
             let mut bp = band_filter(freq_low, freq_high);
             let mut out = Vec::with_capacity(n_samples);
             let ramp = ((5.0 * SAMPLE_RATE_HZ / 1000.0) as usize).min(n_samples / 4).max(1);
@@ -623,6 +641,8 @@ pub fn synth_consonant_banded(c: Consonant, duration_ms: f64, noise: &mut LfsrNo
                 };
                 out.push((n * env) >> 10);
             }
+            // 2026-08-27: 有声摩擦音は摩擦と同時に声帯が振動する
+            let out = if voiced { mix_voice_bar(out, f0_hz) } else { out };
             normalize_rms(out, TARGET_RMS)
         }
         // 接近音: その位置の短い有声区間 (鼻音と同じ 2 フォルマント合成) で近似
@@ -642,13 +662,15 @@ pub fn synth_consonant_banded(c: Consonant, duration_ms: f64, noise: &mut LfsrNo
             let burst_ms = duration_ms * 0.4;
             let fric_ms = duration_ms - burst_ms;
             let mut w = synth_consonant_banded(
-                Consonant::Plosive { burst_freq_low, burst_freq_high },
+                Consonant::Plosive { burst_freq_low, burst_freq_high, voiced: false },
                 burst_ms,
+                f0_hz,
                 noise,
             );
             w.extend(synth_consonant_banded(
-                Consonant::Fricative { freq_low: fric_freq_low, freq_high: fric_freq_high },
+                Consonant::Fricative { freq_low: fric_freq_low, freq_high: fric_freq_high, voiced: false },
                 fric_ms,
+                f0_hz,
                 noise,
             ));
             normalize_rms(w, TARGET_RMS)
@@ -671,6 +693,50 @@ fn band_filter(lo: f64, hi: f64) -> super::cochlea::BandpassBiquad {
 }
 
 /// RMS を target に合わせる（整数演算のみ・平方根は整数ニュートン法）。
+/// 有声子音の **voice bar (前有声)** を作る。
+///
+/// ## 物理
+///
+/// 有声破裂音では**閉鎖中も声帯が振動する**。だが声道が閉じているので
+/// 高周波は放射されず、**低周波だけが組織を通って漏れる**。
+/// スペクトログラムでは低域の帯 (voice bar) に見える。
+/// **日本語の /b d g/ と /p t k/ を分ける主要な手がかりはこれ (前有声)。**
+/// 有声摩擦音では摩擦と同時に声帯が振動する。
+///
+/// ## 実装 (実測前に宣言・以後動かさない)
+///
+/// F0 の**基本波 + 第 2 倍音** (振幅比 2:1)。閉鎖で高次倍音が落ちることの近似。
+/// **振幅は子音本体の RMS の 1/4 (−12 dB)** とする。
+///
+/// ## 重要 — 音量では区別できないようにする
+///
+/// `normalize_rms` は**最後に**掛かるので、**有声も無声も総 RMS は同じ**になる。
+/// **差は周波数構造だけであり、音量で当てられることはない。**
+/// (音量で当てられると、測定が「有声性を聞き分けた」ことの証拠にならない)
+fn voice_bar(base: &[i32], f0_hz: f64) -> Vec<i32> {
+    let n = base.len();
+    if n == 0 { return Vec::new(); }
+    let rms = (base.iter().map(|&s| (s as f64) * (s as f64)).sum::<f64>() / n as f64).sqrt();
+    let target = rms / 4.0; // 宣言: 1/4 (−12 dB)
+    let (p1, p2) = (freq_to_phase_step(f0_hz), freq_to_phase_step(f0_hz * 2.0));
+    let (mut ph1, mut ph2) = (0u32, 0u32);
+    let raw: Vec<i32> = (0..n).map(|_| {
+        let v = (sin_lookup(ph1) * 1000 + sin_lookup(ph2) * 500) >> 14;
+        ph1 = ph1.wrapping_add(p1);
+        ph2 = ph2.wrapping_add(p2);
+        v
+    }).collect();
+    let r = (raw.iter().map(|&s| (s as f64) * (s as f64)).sum::<f64>() / n as f64).sqrt().max(1.0);
+    let g = target / r;
+    raw.iter().map(|&s| ((s as f64) * g).round() as i32).collect()
+}
+
+/// voice bar を重ねる (有声のときだけ呼ぶ)
+fn mix_voice_bar(base: Vec<i32>, f0_hz: f64) -> Vec<i32> {
+    let vb = voice_bar(&base, f0_hz);
+    base.iter().zip(vb.iter()).map(|(&a, &b)| a.saturating_add(b)).collect()
+}
+
 fn normalize_rms(mut wave: Vec<i32>, target: i32) -> Vec<i32> {
     if wave.is_empty() {
         return wave;
@@ -703,7 +769,7 @@ fn isqrt_i64(n: i64) -> i64 {
 pub fn synth_syllable_banded(syl: &Syllable, noise: &mut LfsrNoise, speed: f64) -> Vec<i32> {
     let consonant_ms = 30.0 / speed;
     let vowel_ms = 170.0 / speed;
-    let mut wave = synth_consonant_banded(syl.consonant, consonant_ms, noise);
+    let mut wave = synth_consonant_banded(syl.consonant, consonant_ms, F0_DEFAULT_HZ, noise);
     wave.extend(synth_vowel(&syl.vowel, vowel_ms));
     wave
 }
@@ -749,7 +815,7 @@ mod tests {
     }
 
     fn plosive(lo: f64, hi: f64) -> Consonant {
-        Consonant::Plosive { burst_freq_low: lo, burst_freq_high: hi }
+        Consonant::Plosive { burst_freq_low: lo, burst_freq_high: hi, voiced: false }
     }
 
     /// 既存 `synth_consonant` の**欠陥を固定する**テスト。
@@ -765,8 +831,8 @@ mod tests {
     /// 帯域版は同じ LFSR 種でも帯域が違えば波形が違う。
     #[test]
     fn banded_consonant_uses_burst_frequency() {
-        let a = synth_consonant_banded(plosive(500.0, 2000.0), 30.0, &mut LfsrNoise::new(0xACE1));
-        let b = synth_consonant_banded(plosive(2000.0, 4000.0), 30.0, &mut LfsrNoise::new(0xACE1));
+        let a = synth_consonant_banded(plosive(500.0, 2000.0), 30.0, F0_DEFAULT_HZ, &mut LfsrNoise::new(0xACE1));
+        let b = synth_consonant_banded(plosive(2000.0, 4000.0), 30.0, F0_DEFAULT_HZ, &mut LfsrNoise::new(0xACE1));
         assert_ne!(a, b, "帯域を変えたのに波形が同一");
         assert_eq!(a.len(), b.len());
     }
@@ -775,11 +841,12 @@ mod tests {
     /// 閾値は置かず**順序だけ**を見る（順序の正解は帯域指定＝実験者側にある）。
     #[test]
     fn banded_consonants_ordered_by_band() {
-        let pa = synth_consonant_banded(plosive(500.0, 2000.0), 100.0, &mut LfsrNoise::new(0xACE1));
-        let tu = synth_consonant_banded(plosive(1500.0, 3500.0), 100.0, &mut LfsrNoise::new(0xACE1));
-        let ki = synth_consonant_banded(plosive(2000.0, 4000.0), 100.0, &mut LfsrNoise::new(0xACE1));
+        let pa = synth_consonant_banded(plosive(500.0, 2000.0), 100.0, F0_DEFAULT_HZ, &mut LfsrNoise::new(0xACE1));
+        let tu = synth_consonant_banded(plosive(1500.0, 3500.0), 100.0, F0_DEFAULT_HZ, &mut LfsrNoise::new(0xACE1));
+        let ki = synth_consonant_banded(plosive(2000.0, 4000.0), 100.0, F0_DEFAULT_HZ, &mut LfsrNoise::new(0xACE1));
         let se = synth_consonant_banded(
-            Consonant::Fricative { freq_low: 3000.0, freq_high: 8000.0 },
+            Consonant::Fricative { freq_low: 3000.0, freq_high: 8000.0, voiced: false },
+            F0_DEFAULT_HZ,
             100.0, &mut LfsrNoise::new(0xACE1));
         let (z_pa, z_tu, z_ki, z_se) = (
             zero_crossings(&pa), zero_crossings(&tu), zero_crossings(&ki), zero_crossings(&se));
@@ -793,7 +860,7 @@ mod tests {
     fn banded_consonants_differ_at_production_length() {
         let waves: Vec<Vec<i32>> = [(500.0, 2000.0), (1500.0, 3500.0), (2000.0, 4000.0)]
             .iter()
-            .map(|&(lo, hi)| synth_consonant_banded(plosive(lo, hi), 30.0,
+            .map(|&(lo, hi)| synth_consonant_banded(plosive(lo, hi), 30.0, F0_DEFAULT_HZ,
                                                     &mut LfsrNoise::new(0xACE1)))
             .collect();
         let z: Vec<usize> = waves.iter().map(|w| zero_crossings(w)).collect();
@@ -809,8 +876,8 @@ mod tests {
     #[test]
     fn banded_nasal_shares_rms_with_others() {
         let nasal = synth_consonant_banded(
-            Consonant::Nasal { f1: 250.0, f2: 1500.0 }, 30.0, &mut LfsrNoise::new(0xACE1));
-        let plos = synth_consonant_banded(plosive(500.0, 2000.0), 30.0, &mut LfsrNoise::new(0xACE1));
+            Consonant::Nasal { f1: 250.0, f2: 1500.0 }, 30.0, F0_DEFAULT_HZ, &mut LfsrNoise::new(0xACE1));
+        let plos = synth_consonant_banded(plosive(500.0, 2000.0), 30.0, F0_DEFAULT_HZ, &mut LfsrNoise::new(0xACE1));
         let (rn, rp) = (wave_rms(&nasal), wave_rms(&plos));
         assert!((rn - rp).abs() / rp < 0.20,
                 "鼻音 RMS {:.0} が破裂音 {:.0} と揃っていない", rn, rp);
@@ -823,13 +890,13 @@ mod tests {
     #[test]
     fn banded_consonants_share_rms() {
         let mut all = vec![
-            Consonant::Fricative { freq_low: 3000.0, freq_high: 8000.0 },
+            Consonant::Fricative { freq_low: 3000.0, freq_high: 8000.0, voiced: false },
         ];
         for &(lo, hi) in &[(500.0, 2000.0), (1500.0, 3500.0), (2000.0, 4000.0)] {
             all.push(plosive(lo, hi));
         }
         for c in all {
-            let w = synth_consonant_banded(c, 30.0, &mut LfsrNoise::new(0xACE1));
+            let w = synth_consonant_banded(c, 30.0, F0_DEFAULT_HZ, &mut LfsrNoise::new(0xACE1));
             let r = wave_rms(&w);
             // 破裂音は先頭 10ms が無音なので、その分だけ全体 RMS は目標を下回る。
             // 整数化と無音区間を許容して ±15% で判定。
@@ -849,8 +916,8 @@ mod tests {
 
     #[test]
     fn banded_consonant_deterministic() {
-        let a = synth_consonant_banded(plosive(500.0, 2000.0), 30.0, &mut LfsrNoise::new(0xACE1));
-        let b = synth_consonant_banded(plosive(500.0, 2000.0), 30.0, &mut LfsrNoise::new(0xACE1));
+        let a = synth_consonant_banded(plosive(500.0, 2000.0), 30.0, F0_DEFAULT_HZ, &mut LfsrNoise::new(0xACE1));
+        let b = synth_consonant_banded(plosive(500.0, 2000.0), 30.0, F0_DEFAULT_HZ, &mut LfsrNoise::new(0xACE1));
         assert_eq!(a, b);
     }
 
@@ -858,7 +925,7 @@ mod tests {
     #[test]
     fn consonant_none_is_empty() {
         assert!(synth_consonant(Consonant::None, 30.0, &mut LfsrNoise::new(0xACE1)).is_empty());
-        assert!(synth_consonant_banded(Consonant::None, 30.0, &mut LfsrNoise::new(0xACE1))
+        assert!(synth_consonant_banded(Consonant::None, 30.0, F0_DEFAULT_HZ, &mut LfsrNoise::new(0xACE1))
             .is_empty());
     }
 
@@ -974,7 +1041,7 @@ mod tests {
     fn consonant_plosive_has_silence_then_burst() {
         let mut n = LfsrNoise::new(0xACE1);
         let wave = synth_consonant(
-            Consonant::Plosive { burst_freq_low: 500.0, burst_freq_high: 2000.0 },
+            Consonant::Plosive { burst_freq_low: 500.0, burst_freq_high: 2000.0, voiced: false },
             30.0,
             &mut n,
         );

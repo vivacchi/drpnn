@@ -27,7 +27,7 @@ use spiking_brain::phase2_f::cochlea::{
     compress_sqrt, ENV_LEAK_SHIFT, FIRE_REFRACTORY_STEPS, FIRE_THRESHOLD, F_MIN_HZ, N_BANDS,
     SAMPLES_PER_STEP,
 };
-use spiking_brain::phase2_f::phoneme_synth::{
+use spiking_brain::phase2_f::phoneme_synth::{F0_DEFAULT_HZ, 
     standard_syllables, synth_consonant_banded, synth_vowel, vowels, LfsrNoise, SAMPLE_RATE_HZ,
 };
 
@@ -113,7 +113,7 @@ fn measure(f_max: f64) -> Row {
     // --- se (摩擦音単体) ---
     let se_consonant = standard_syllables()[3].consonant;
     let mut noise = LfsrNoise::new(SEED);
-    let se_wave = synth_consonant_banded(se_consonant, CONSONANT_MS, &mut noise);
+    let se_wave = synth_consonant_banded(se_consonant, CONSONANT_MS, F0_DEFAULT_HZ, &mut noise);
     let se = band_spikes(&se_wave, f_max);
 
     // --- 5 母音単体 (G5 の対象) ---
@@ -133,7 +133,7 @@ fn measure(f_max: f64) -> Row {
         .iter()
         .map(|s| {
             let mut n = LfsrNoise::new(SEED);
-            band_spikes(&synth_consonant_banded(s.consonant, CONSONANT_MS, &mut n), f_max)
+            band_spikes(&synth_consonant_banded(s.consonant, CONSONANT_MS, F0_DEFAULT_HZ, &mut n), f_max)
         })
         .collect();
     let mut cons_max = 0.0f64;

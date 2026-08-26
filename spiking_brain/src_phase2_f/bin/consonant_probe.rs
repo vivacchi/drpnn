@@ -16,7 +16,7 @@
 //! CLI: consonant_probe
 
 use spiking_brain::phase2_f::cochlea::{Cochlea, N_BANDS, SAMPLES_PER_STEP};
-use spiking_brain::phase2_f::phoneme_synth::{
+use spiking_brain::phase2_f::phoneme_synth::{F0_DEFAULT_HZ, 
     standard_syllables, synth_consonant, synth_consonant_banded, LfsrNoise,
 };
 
@@ -77,7 +77,7 @@ fn main() {
             for (tag, banded) in [("旧", false), ("帯域", true)] {
                 let mut n = LfsrNoise::new(SEED);
                 let w = if banded {
-                    synth_consonant_banded(s.consonant, CONSONANT_MS, &mut n)
+                    synth_consonant_banded(s.consonant, CONSONANT_MS, F0_DEFAULT_HZ, &mut n)
                 } else {
                     synth_consonant(s.consonant, CONSONANT_MS, &mut n)
                 };
@@ -100,7 +100,7 @@ fn main() {
         for s in syls.iter() {
             let mut noise = LfsrNoise::new(SEED);
             let wave = if banded {
-                synth_consonant_banded(s.consonant, CONSONANT_MS, &mut noise)
+                synth_consonant_banded(s.consonant, CONSONANT_MS, F0_DEFAULT_HZ, &mut noise)
             } else {
                 synth_consonant(s.consonant, CONSONANT_MS, &mut noise)
             };

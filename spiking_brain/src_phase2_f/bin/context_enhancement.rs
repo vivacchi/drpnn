@@ -56,7 +56,7 @@
 
 use spiking_brain::phase2_f::cochlea::{Cochlea, N_BANDS, SAMPLES_PER_STEP};
 use spiking_brain::phase2_f::cochlear_nucleus::{CochlearNucleus, N_CN_OUTPUT};
-use spiking_brain::phase2_f::phoneme_synth::{
+use spiking_brain::phase2_f::phoneme_synth::{F0_DEFAULT_HZ, 
     synth_consonant_banded, synth_vowel, vowels, Consonant, LfsrNoise,
 };
 
@@ -67,10 +67,10 @@ const SR: f64 = 16000.0;
 
 fn consonants() -> Vec<(&'static str, Consonant)> {
     vec![
-        ("pa", Consonant::Plosive { burst_freq_low: 500.0, burst_freq_high: 2000.0 }),
-        ("tu", Consonant::Plosive { burst_freq_low: 1500.0, burst_freq_high: 3500.0 }),
-        ("ki", Consonant::Plosive { burst_freq_low: 2000.0, burst_freq_high: 4000.0 }),
-        ("se", Consonant::Fricative { freq_low: 3000.0, freq_high: 8000.0 }),
+        ("pa", Consonant::Plosive { burst_freq_low: 500.0, burst_freq_high: 2000.0, voiced: false }),
+        ("tu", Consonant::Plosive { burst_freq_low: 1500.0, burst_freq_high: 3500.0, voiced: false }),
+        ("ki", Consonant::Plosive { burst_freq_low: 2000.0, burst_freq_high: 4000.0, voiced: false }),
+        ("se", Consonant::Fricative { freq_low: 3000.0, freq_high: 8000.0, voiced: false }),
         ("mo", Consonant::Nasal { f1: 250.0, f2: 1500.0 }),
     ]
 }
@@ -90,7 +90,7 @@ impl Ctx {
 /// 子音の波形 (全文脈で同一であるべきもの)
 fn consonant_wave(c: Consonant) -> Vec<i32> {
     let mut n = LfsrNoise::new(SEED);
-    synth_consonant_banded(c, CONSONANT_MS, &mut n)
+    synth_consonant_banded(c, CONSONANT_MS, F0_DEFAULT_HZ, &mut n)
 }
 
 /// 文脈つきの波形と、その中で子音が占める step 範囲を返す

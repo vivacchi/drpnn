@@ -38,7 +38,7 @@ use spiking_brain::phase2_f::cochlea::{
     erb_q_factor, erb_spaced_freqs, BandpassBiquad, Cochlea, EnvelopeDetector, FireGenerator,
     ENV_LEAK_SHIFT, FIRE_REFRACTORY_STEPS, F_MAX_HZ, F_MIN_HZ, N_BANDS, SAMPLES_PER_STEP,
 };
-use spiking_brain::phase2_f::phoneme_synth::{
+use spiking_brain::phase2_f::phoneme_synth::{F0_DEFAULT_HZ, 
     standard_syllables, synth_consonant, synth_consonant_banded, Consonant, LfsrNoise,
     SAMPLE_RATE_HZ,
 };
@@ -102,8 +102,8 @@ fn nearest_band(freqs: &[f64], f_hz: f64) -> usize {
 /// 指定帯域のうち蝸牛が表現できない割合を返す。
 fn target_bands(c: Consonant, freqs: &[f64]) -> (Vec<usize>, f64) {
     match c {
-        Consonant::Plosive { burst_freq_low: lo, burst_freq_high: hi }
-        | Consonant::Fricative { freq_low: lo, freq_high: hi } => {
+        Consonant::Plosive { burst_freq_low: lo, burst_freq_high: hi, .. }
+        | Consonant::Fricative { freq_low: lo, freq_high: hi, .. } => {
             let inside: Vec<usize> = (0..N_BANDS)
                 .filter(|&i| freqs[i] >= lo && freqs[i] <= hi)
                 .collect();
@@ -154,8 +154,8 @@ fn main() {
     for s in syls.iter() {
         let (t, unrep) = target_bands(s.consonant, &freqs);
         let spec = match s.consonant {
-            Consonant::Plosive { burst_freq_low: lo, burst_freq_high: hi }
-            | Consonant::Fricative { freq_low: lo, freq_high: hi } => {
+            Consonant::Plosive { burst_freq_low: lo, burst_freq_high: hi, .. }
+            | Consonant::Fricative { freq_low: lo, freq_high: hi, .. } => {
                 format!("{:.0}-{:.0}Hz", lo, hi)
             }
             Consonant::Nasal { f1, f2 } => format!("f1={:.0} f2={:.0}Hz", f1, f2),
@@ -190,7 +190,7 @@ fn main() {
                     .map(|s| {
                         let mut n = LfsrNoise::new(seed);
                         let w = if banded {
-                            synth_consonant_banded(s.consonant, CONSONANT_MS, &mut n)
+                            synth_consonant_banded(s.consonant, CONSONANT_MS, F0_DEFAULT_HZ, &mut n)
                         } else {
                             synth_consonant(s.consonant, CONSONANT_MS, &mut n)
                         };
@@ -245,7 +245,7 @@ fn main() {
                 .map(|s2| {
                     let mut n = LfsrNoise::new(SEEDS[0]);
                     let w = if banded {
-                        synth_consonant_banded(s2.consonant, CONSONANT_MS, &mut n)
+                        synth_consonant_banded(s2.consonant, CONSONANT_MS, F0_DEFAULT_HZ, &mut n)
                     } else {
                         synth_consonant(s2.consonant, CONSONANT_MS, &mut n)
                     };

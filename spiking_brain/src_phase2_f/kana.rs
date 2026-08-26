@@ -51,11 +51,26 @@ pub enum Mora {
 /// 上の 5/8 が可測域の外にある (既知の制約・§8.1)。
 fn consonant_of(row: char) -> Consonant {
     match row {
-        'k' | 'g' => Consonant::Plosive { burst_freq_low: 2000.0, burst_freq_high: 4000.0 },
-        't' | 'd' => Consonant::Plosive { burst_freq_low: 1500.0, burst_freq_high: 3500.0 },
-        'p' | 'b' => Consonant::Plosive { burst_freq_low: 500.0, burst_freq_high: 2000.0 },
-        's' | 'z' => Consonant::Fricative { freq_low: 3000.0, freq_high: 8000.0 },
-        'S' => Consonant::Fricative { freq_low: 2000.0, freq_high: 6000.0 }, // し・しゃ行
+        // 2026-08-27: **有声/無声を分離した (軌道修正)**。
+        //
+        // それまで 'k'|'g' / 't'|'d' / 'p'|'b' / 's'|'z' を**同じ子音にマップ**しており、
+        // **濁音と清音が完全に同一の波形**だった。実コーパスでは
+        // **モーラの 41.7% がこの縮退の影響を受けていた** (§14.21)。
+        // 46 項目のコーパスには濁音が無かったので、この穴は一度も表に出ていなかった。
+        //
+        // 帯域 (調音位置) は同じで、**違うのは声帯振動の有無だけ**。
+        // これは生体でも同じで、/k/ と /g/ は同じ軟口蓋閉鎖である。
+        'k' => Consonant::Plosive { burst_freq_low: 2000.0, burst_freq_high: 4000.0, voiced: false },
+        'g' => Consonant::Plosive { burst_freq_low: 2000.0, burst_freq_high: 4000.0, voiced: true },
+        't' => Consonant::Plosive { burst_freq_low: 1500.0, burst_freq_high: 3500.0, voiced: false },
+        'd' => Consonant::Plosive { burst_freq_low: 1500.0, burst_freq_high: 3500.0, voiced: true },
+        'p' => Consonant::Plosive { burst_freq_low: 500.0, burst_freq_high: 2000.0, voiced: false },
+        'b' => Consonant::Plosive { burst_freq_low: 500.0, burst_freq_high: 2000.0, voiced: true },
+        's' => Consonant::Fricative { freq_low: 3000.0, freq_high: 8000.0, voiced: false },
+        'z' => Consonant::Fricative { freq_low: 3000.0, freq_high: 8000.0, voiced: true },
+        'S' => Consonant::Fricative { freq_low: 2000.0, freq_high: 6000.0, voiced: false }, // し・しゃ行
+        // 2026-08-27 新設: じ・ぢ (/ʑ/)。現代日本語で じ=ぢ は同音なので同じ記号でよい。
+        'Z' => Consonant::Fricative { freq_low: 2000.0, freq_high: 6000.0, voiced: true },
         // 破擦音 (2026-08-26): 摩擦のみの近似では す=つ / し=ち が
         // 完全に同一の応答になっていた (実測)。破裂 + 摩擦の複合として作る。
         'c' => Consonant::Affricate {
@@ -70,11 +85,14 @@ fn consonant_of(row: char) -> Consonant {
             fric_freq_low: 2000.0,
             fric_freq_high: 6000.0,    // /sh/ と同じ摩擦 (ち)
         },
-        'h' => Consonant::Fricative { freq_low: 500.0, freq_high: 4000.0 },
+        'h' => Consonant::Fricative { freq_low: 500.0, freq_high: 4000.0, voiced: false }, // は行は無声
         'm' => Consonant::Nasal { f1: 250.0, f2: 1500.0 },
         'n' => Consonant::Nasal { f1: 250.0, f2: 1700.0 },
         // ラ行 (弾き音) は破裂音で近似する。**正確でない**ことを明記 (§14)。
-        'r' => Consonant::Plosive { burst_freq_low: 1200.0, burst_freq_high: 2800.0 },
+        // 2026-08-27: ら行 /ɾ/ は**有声**の弾き音。破裂音で近似しているが声帯は振動する。
+        // これで た(無声) と ら(有声) に手がかりが増える
+        // (§14.6.2 で た-ら が最も紛らわしい対 0.9995 だった)。
+        'r' => Consonant::Plosive { burst_freq_low: 1200.0, burst_freq_high: 2800.0, voiced: true },
         // 接近音 (2026-08-26): 母音のみの近似では や=あ / ゆ=う / よ=お / わ=あ / を=お が
         // 完全に同一の応答になっていた (実測) ので、専用の型を与える。
         'y' => Consonant::Approximant { f1: 300.0, f2: 2200.0 }, // 硬口蓋
@@ -97,9 +115,9 @@ fn kana_to_cv(c: char) -> Option<(char, usize)> {
         ('か', 'k', 0), ('き', 'k', 1), ('く', 'k', 2), ('け', 'k', 3), ('こ', 'k', 4),
         ('が', 'g', 0), ('ぎ', 'g', 1), ('ぐ', 'g', 2), ('げ', 'g', 3), ('ご', 'g', 4),
         ('さ', 's', 0), ('し', 'S', 1), ('す', 's', 2), ('せ', 's', 3), ('そ', 's', 4),
-        ('ざ', 'z', 0), ('じ', 'S', 1), ('ず', 'z', 2), ('ぜ', 'z', 3), ('ぞ', 'z', 4),
+        ('ざ', 'z', 0), ('じ', 'Z', 1), ('ず', 'z', 2), ('ぜ', 'z', 3), ('ぞ', 'z', 4),
         ('た', 't', 0), ('ち', 'C', 1), ('つ', 'c', 2), ('て', 't', 3), ('と', 't', 4),
-        ('だ', 'd', 0), ('ぢ', 'S', 1), ('づ', 'z', 2), ('で', 'd', 3), ('ど', 'd', 4),
+        ('だ', 'd', 0), ('ぢ', 'Z', 1), ('づ', 'z', 2), ('で', 'd', 3), ('ど', 'd', 4),
         ('な', 'n', 0), ('に', 'n', 1), ('ぬ', 'n', 2), ('ね', 'n', 3), ('の', 'n', 4),
         ('は', 'h', 0), ('ひ', 'h', 1), ('ふ', 'h', 2), ('へ', 'h', 3), ('ほ', 'h', 4),
         ('ば', 'b', 0), ('び', 'b', 1), ('ぶ', 'b', 2), ('べ', 'b', 3), ('ぼ', 'b', 4),
@@ -186,7 +204,7 @@ pub fn synth_utterance(moras: &[Mora], f0_hz: f64, noise: &mut LfsrNoise) -> Vec
         match *m {
             Mora::Cv { consonant, vowel } => {
                 if consonant != Consonant::None {
-                    out.extend(synth_consonant_banded(consonant, CONSONANT_MS, noise));
+                    out.extend(synth_consonant_banded(consonant, CONSONANT_MS, f0_hz, noise));
                     out.extend(synth_vowel_f0(&vowel, f0_hz, MORA_MS - CONSONANT_MS));
                 } else {
                     out.extend(synth_vowel_f0(&vowel, f0_hz, MORA_MS));
@@ -211,6 +229,7 @@ pub fn synth_utterance(moras: &[Mora], f0_hz: f64, noise: &mut LfsrNoise) -> Vec
                 out.extend(synth_consonant_banded(
                     Consonant::Nasal { f1: 250.0, f2: 1700.0 },
                     MORA_MS,
+                    f0_hz,
                     noise,
                 ));
             }
