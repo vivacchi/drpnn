@@ -343,3 +343,7 @@ path = "src_phase2_f/bin/sonorant_check.rs"
 [[bin]]
 name = "boundary_check"
 path = "src_phase2_f/bin/boundary_check.rs"
+
+[[bin]]
+name = "word_stream"
+path = "src_phase2_f/bin/word_stream.rs"
