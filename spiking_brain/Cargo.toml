@@ -347,3 +347,7 @@ path = "src_phase2_f/bin/boundary_check.rs"
 [[bin]]
 name = "word_stream"
 path = "src_phase2_f/bin/word_stream.rs"
+
+[[bin]]
+name = "corpus_word_learning"
+path = "src_phase2_f/bin/corpus_word_learning.rs"
