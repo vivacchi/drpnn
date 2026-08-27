@@ -83,8 +83,13 @@ fn load_moras(n: usize) -> (Vec<Mora>, usize) {
     (out, kinds.len())
 }
 
-/// (本数, LTP事象, LTD事象, 一度でもLTPされた本数, conductance>初期値 の本数, 最大conductance, 伝達可)
-fn census(net: &ThermoNetwork, input_only: bool) -> (usize, u64, u64, usize, usize, i32, usize) {
+/// (本数, LTP事象, LTD事象, 一度でもLTPされた本数, conductance>初期値 の本数,
+///  最大conductance, 伝達可, **平均conductance**)
+///
+/// **平均 conductance を足した理由**: `CONDUCTANCE_MAX = 100` で初期値が 80 なので、
+/// **天井まで 20 しかない**。`LTP_AMOUNT = 5` なら **4 回の正味 LTP で天井**に着く。
+/// 「80 超の本数」だけを見ると飽和して差が見えなくなる。
+fn census(net: &ThermoNetwork, input_only: bool) -> (usize, u64, u64, usize, usize, i32, usize, f64) {
     let is_in = |i: usize| net.input_neurons.contains(&i);
     let sel: Vec<&spiking_brain::phase2_f::thermo_synapse::ThermoSynapse> =
         net.synapses.iter().filter(|s| is_in(s.pre) == input_only).collect();
@@ -94,12 +99,14 @@ fn census(net: &ThermoNetwork, input_only: bool) -> (usize, u64, u64, usize, usi
     let above = sel.iter().filter(|s| s.conductance > INITIAL_CONDUCTANCE).count();
     let maxc = sel.iter().map(|s| s.conductance).max().unwrap_or(0);
     let live = sel.iter().filter(|s| s.alive && s.conductance >= SIGNAL_SCALE_DIVISOR).count();
-    (sel.len(), ltp, ltd, touched, above, maxc, live)
+    let mean_g = if sel.is_empty() { 0.0 }
+                 else { sel.iter().map(|s| s.conductance as f64).sum::<f64>() / sel.len() as f64 };
+    (sel.len(), ltp, ltd, touched, above, maxc, live, mean_g)
 }
 
-fn row(name: &str, c: (usize, u64, u64, usize, usize, i32, usize)) {
-    println!("  {:<14} {:>8} {:>12} {:>12} {:>12} {:>10} {:>8} {:>10}",
-             name, c.0, c.1, c.2, c.3, c.4, c.5, c.6);
+fn row(name: &str, c: (usize, u64, u64, usize, usize, i32, usize, f64)) {
+    println!("  {:<14} {:>8} {:>12} {:>12} {:>12} {:>8} {:>7} {:>9} {:>9.2}",
+             name, c.0, c.1, c.2, c.3, c.4, c.5, c.6, c.7);
 }
 
 fn main() {
@@ -146,8 +153,8 @@ fn main() {
     let mut next = 0usize;
     let (mut fire_in, mut fire_cx, mut n_steps) = (0u64, 0u64, 0u64);
     println!();
-    println!("  {:<14} {:>8} {:>12} {:>12} {:>12} {:>10} {:>8} {:>10}",
-             "", "本数", "LTP事象", "LTD事象", "一度でもLTP", "**80超**", "最大G", "伝達可");
+    println!("  {:<14} {:>8} {:>12} {:>12} {:>12} {:>8} {:>7} {:>9} {:>9}",
+             "", "本数", "LTP事象", "LTD事象", "一度でもLTP", "80超", "最大G", "伝達可", "**平均G**");
     for i in 0..=moras.len() {
         if next < cps.len() && cps[next] == i {
             println!("  --- {} モーラ聞いた時点 ---", i);
@@ -183,7 +190,11 @@ fn main() {
     println!("  **G97c 正味で増強された本数 (conductance > {})** -> 入力→皮質 {} 本 / それ以外 {} 本 -> {}",
              INITIAL_CONDUCTANCE, inp.4, oth.4,
              if inp.4 + oth.4 == 0 { "**ゼロ。LTP は一度も減衰に勝っていない**" } else { "**存在する**" });
-    println!("  G97d LTP と LTD の比 -> 入力→皮質 {}:{} / それ以外 {}:{}", inp.1, inp.2, oth.1, oth.2);
+    println!("  G97d LTP と LTD の比 -> 入力→皮質 {:.2} 倍 ({}:{}) / それ以外 {:.2} 倍 ({}:{})",
+             inp.2 as f64 / (inp.1.max(1)) as f64, inp.1, inp.2,
+             oth.2 as f64 / (oth.1.max(1)) as f64, oth.1, oth.2);
+    println!("  **平均 conductance (飽和しない指標)** -> 入力→皮質 {:.2} / それ以外 {:.2} (初期値 {})",
+             inp.7, oth.7, INITIAL_CONDUCTANCE);
     let n_in = net.input_neurons.len() as f64;
     let n_cx = (net.n_neurons() - net.input_neurons.len()) as f64;
     let st = n_steps.max(1) as f64;

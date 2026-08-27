@@ -16,6 +16,51 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// 軸索成長を試みる周期 (step 数)。指示書 §4 では 200。
+/// **M1 の因果窓** [step]。(2026-08-27)
+///
+/// ## なぜ変えたか
+///
+/// 従来は 160 step = **80 ms**。**実物の STDP 窓は 20 ms 程度**である
+/// (Bi & Poo 1998 の時定数 τ ≈ 17-20 ms)。**4 倍広かった。**
+///
+/// §14.44 で出荷コードによって実測した:
+/// - 入力ニューロン 0.0605 発火/step ≈ 121 Hz / 皮質ニューロン 0.0028 ≈ 5.6 Hz
+///   = **比 21.2 倍**
+/// - 入力→皮質のシナプスで **LTD が LTP の 6.0 倍**起き、
+///   **正味で初期値 80 を超えた本数は 0**。皮質内では LTP:LTD がほぼ 1:1。
+///
+/// **窓が広いほど「直前に発火していた」が成立しやすく、
+/// 21 倍速い pre 側が一方的に恩恵を受ける** (LTD は pre 発火時に post の痕跡を見る)。
+///
+/// **パラメータの発明ではなく、文献値への是正である。**
+/// `DRPNN_CAUSAL_WINDOW` で上書きできる (同じビルドの A/B)。
+/// **160 を渡せば従来と厳密に同一。**
+///
+/// M2 の 320 step (160 ms・音節スケール) は**変えない** (別の設計判断)。
+pub const CAUSAL_WINDOW_M1_DEFAULT: i32 = 40;
+
+static CAUSAL_WINDOW_M1: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+
+/// M1 の因果窓 [step]。初回だけ環境変数を読む。**乱数は使わない。**
+pub fn causal_window_m1() -> i32 {
+    use std::sync::atomic::Ordering;
+    let v = CAUSAL_WINDOW_M1.load(Ordering::Relaxed);
+    if v < 0 {
+        let w = std::env::var("DRPNN_CAUSAL_WINDOW").ok()
+            .and_then(|s| s.parse::<i32>().ok())
+            .unwrap_or(CAUSAL_WINDOW_M1_DEFAULT)
+            .max(2);
+        CAUSAL_WINDOW_M1.store(w, Ordering::Relaxed);
+        return w;
+    }
+    v
+}
+
+/// 実行時に切り替える (対照実験用)。**160 で従来と厳密に同一。**
+pub fn set_causal_window_m1(w: i32) {
+    CAUSAL_WINDOW_M1.store(w.max(2), std::sync::atomic::Ordering::Relaxed);
+}
+
 pub const GROWTH_INTERVAL: i32 = 200;
 /// シナプス信号スケール: 1 発火あたりの寄与 = conductance / SIGNAL_SCALE_DIVISOR
 /// 案A 調整: Phase 1 spike_gain=10 とのスケール整合
@@ -97,7 +142,7 @@ impl Default for ThermoNetworkConfig {
             dt_ms: 0.5,
             enable_up_down: false, // デフォルト OFF (既存実験との互換性、有効化は明示的に)
             io_layout: None, // デフォルト rigid (M1 互換)
-            causal_window: 160, // M1 デフォルト (80ms)
+            causal_window: causal_window_m1(),
             threshold_diversity_std: 0, // デフォルト OFF (全ニューロン同一閾値、 既存互換)
             conductance_decay_interval: 1000,  // デフォルト 500ms (既存互換)
             vitality_decay_interval: 10000,    // デフォルト 5s (既存互換)
@@ -140,7 +185,7 @@ impl ThermoNetworkConfig {
             dt_ms: 0.5,
             enable_up_down: false,
             io_layout: Some(IoLayout { input_positions, output_positions }),
-            causal_window: 160,
+            causal_window: causal_window_m1(),
             threshold_diversity_std: 0,
             conductance_decay_interval: 1000,
             vitality_decay_interval: 10000,
@@ -185,7 +230,7 @@ impl ThermoNetworkConfig {
             dt_ms: 0.5,
             enable_up_down: false,
             io_layout: Some(IoLayout { input_positions, output_positions }),
-            causal_window: 160,
+            causal_window: causal_window_m1(),
             threshold_diversity_std: 0,
             conductance_decay_interval: 1000,
             vitality_decay_interval: 10000,
@@ -225,7 +270,7 @@ impl ThermoNetworkConfig {
             dt_ms: 0.5,
             enable_up_down: false,
             io_layout: Some(IoLayout { input_positions, output_positions }),
-            causal_window: 160,
+            causal_window: causal_window_m1(),
             threshold_diversity_std: 0,
             conductance_decay_interval: 1000,
             vitality_decay_interval: 10000,
