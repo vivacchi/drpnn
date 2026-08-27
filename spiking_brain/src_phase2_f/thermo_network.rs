@@ -16,6 +16,62 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// 軸索成長を試みる周期 (step 数)。指示書 §4 では 200。
+/// 皮質ニューロンに**定電流による自走**を許すか。
+///
+/// **既定 true (= 従来)。E 案 (自走を消す) を試したが正味で悪化したため。** §14.46 を見よ。
+/// **自走は有害だが同時に支えでもあった**: 消すと皮質がほぼ黙り (0.0043 -> 0.0004)、
+/// post が発火しないので LTP が止まり、皮質内の伝達可が 2,682 -> 6 に壊滅した。
+/// `DRPNN_CORTEX_TONIC=0` で E 案を試せる。
+///
+/// ## 何が起きていたか
+///
+/// `n.spontaneous_input = (idx as i32) % 4` で個体差 (Na/K ポンプ密度差) を配っているが、
+/// `leak = 2` なので正味の駆動は `{-2, -1, 0, +1}` になる。
+/// 膜電位は `membrane += input + spont - leak` のあと **負なら 0 にクランプ**される
+/// (thermo_neuron.rs:333) ので:
+///
+/// - `spont ∈ {0,1,2}` の **3/4 は入力ゼロでは絶対に発火しない**
+/// - `spont = 3` の **1/4 (皮質 436 個中 109 個) だけが正味 +1/step で自走する**
+///
+/// **定電流では「個体差」にならない。なるのは「沈黙」か「完全に周期的なメトロノーム」かの
+/// 二値だけである。** 意図 (段階的な個体差) が実装で実現できていない。
+///
+/// ## なぜ有害か
+///
+/// 自走する 109 個の発火周期は **約 112 step**。これは `spike_trace_init` (旧 160) より短いので、
+/// **その 109 個の発火痕跡は一度も 0 に戻らない。**
+/// LTD は「pre 発火時に post の痕跡が生きていたら」なので、
+/// **その 109 個への求心シナプスは、無音でも 100% のデューティで LTD を浴び続ける。**
+///
+/// §14.45 で因果窓を 40 step にしたときデューティは 40/112 = 36% に下がった。
+/// **これが A 案が効いた理由であり、同時に足りなかった理由である。**
+///
+/// ## 何を変えるか
+///
+/// **`spontaneous_input` を `leak` で頭打ちにする。** 自走は消えるが、
+/// **`spont` は入力があるときのバイアスとしては効き続ける** (上の式の通り) ので、
+/// **個体差は残る。**
+///
+/// `DRPNN_CORTEX_TONIC=1` で旧挙動 (同じビルドの A/B)。
+static CORTEX_TONIC: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
+
+/// 皮質の定電流自走を許すか。初回だけ環境変数を読む。**乱数は使わない。**
+pub fn cortex_tonic_enabled() -> bool {
+    use std::sync::atomic::Ordering;
+    let v = CORTEX_TONIC.load(Ordering::Relaxed);
+    if v == 2 {
+        let on = std::env::var("DRPNN_CORTEX_TONIC").map(|s| s != "0").unwrap_or(true);
+        CORTEX_TONIC.store(on as u8, Ordering::Relaxed);
+        return on;
+    }
+    v == 1
+}
+
+/// 実行時に切り替える (対照実験用)。**true = 従来 = 既定。**
+pub fn set_cortex_tonic(on: bool) {
+    CORTEX_TONIC.store(on as u8, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// **M1 の因果窓** [step]。(2026-08-27)
 ///
 /// ## なぜ変えたか
@@ -569,7 +625,14 @@ impl ThermoNetwork {
             if input_ids.contains(&idx) {
                 continue;
             }
-            n.spontaneous_input = (idx as i32) % 4;
+            // **E 案 (2026-08-27)**: 自走を許さない。**個体差は残す。**
+            // `spont` は入力があるときのバイアスとしては効き続けるので、
+            // `leak` で頭打ちにしても個体差は失われない。
+            n.spontaneous_input = if cortex_tonic_enabled() {
+                (idx as i32) % 4
+            } else {
+                ((idx as i32) % 4).min(n.leak)
+            };
             // leak は excitatory()/inhibitory() で既に 2 設定済み
         }
 
