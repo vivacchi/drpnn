@@ -18,14 +18,14 @@
 //! これらは CV でないので別の型にする。
 
 use super::phoneme_synth::{
-    synth_consonant_banded, synth_vowel_f0, synth_vowel_f0_glide, vowels, Consonant, LfsrNoise, Vowel, SAMPLE_RATE_HZ,
+    synth_consonant_banded, synth_vowel_f0, synth_vowel_f0_full, vowels, Consonant, LfsrNoise, Vowel, SAMPLE_RATE_HZ,
 };
 
 /// 日本語のモーラ。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Mora {
     /// 子音 + 母音 (子音なしの「あいうえお」は `Consonant::None`)
-    Cv { consonant: Consonant, vowel: Vowel, locus: Option<[f64; 3]> },
+    Cv { consonant: Consonant, vowel: Vowel, locus: Option<[f64; 3]>, vot_ms: f64 },
     /// 長音「ー」: 直前のモーラの母音を 1 モーラぶん伸ばす
     Long,
     /// 促音「っ」: 無音 1 モーラ (次の子音の閉鎖に相当)
@@ -71,6 +71,51 @@ pub fn formant_transition_enabled() -> bool {
 /// 遷移を実行時に切り替える (対照実験用)。
 pub fn set_formant_transition(on: bool) {
     TRANSITION.store(on as u8, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// VOT (気音) の ON/OFF。**同じビルドの中で対照を取るために要る。**
+/// 既定 ON。`DRPNN_VOT=0` で OFF。`set_vot` で実行時にも切れる。
+static VOT_ON: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
+
+/// VOT が有効か。初回だけ環境変数を読む。**乱数は使わない。**
+pub fn vot_enabled() -> bool {
+    use std::sync::atomic::Ordering;
+    let v = VOT_ON.load(Ordering::Relaxed);
+    if v == 2 {
+        let on = std::env::var("DRPNN_VOT").map(|s| s != "0").unwrap_or(true);
+        VOT_ON.store(on as u8, Ordering::Relaxed);
+        return on;
+    }
+    v == 1
+}
+
+/// VOT を実行時に切り替える (対照実験用)。
+pub fn set_vot(on: bool) {
+    VOT_ON.store(on as u8, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// **VOT (Voice Onset Time)** = 破裂の解放から声帯振動が始まるまでの時間 [ms]。(2026-08-27)
+///
+/// 日本語の語頭無声破裂音の代表値 (Shimizu 1996 / Riney et al. 2007)。
+/// **軟口蓋が最も長いのは言語普遍**である (閉鎖の解放が遅く、声門下圧が抜けにくい)。
+///
+/// **有声破裂音は 0**。有声側の手がかりは解放「前」の voice bar (前有声) であり、
+/// 解放「後」に気音は入らない。**この非対称そのものが有声性の手がかりである。**
+///
+/// 摩擦音・鼻音・接近音・弾き音は 0。破裂という事象が無いので VOT が定義できない。
+///
+/// **これらの値は文献の代表値であり、結果を見てから動かさない。**
+fn vot_ms_of(row: char) -> f64 {
+    if !vot_enabled() {
+        return 0.0;
+    }
+    match row {
+        'p' => 25.0,          // 両唇 無声破裂
+        't' => 25.0,          // 歯茎 無声破裂
+        'k' => 45.0,          // 軟口蓋 無声破裂 (**最も長い**)
+        'c' | 'C' => 10.0,    // 無声破擦 (つ [ts] ・ち [tɕ]) — 摩擦の後の気音は短い
+        _ => 0.0,             // 有声破裂 (前有声で符号化) / 摩擦 / 鼻音 / 接近 / 弾き
+    }
 }
 
 /// 調音位置ごとの**フォルマント遷移の始点** (locus)。[F1, F2, F3] Hz。(2026-08-27)
@@ -215,9 +260,9 @@ pub fn moras_from_kana(s: &str) -> (Vec<Mora>, usize) {
                     'ゅ' => 2,
                     _ => 4,
                 };
-                if let Some(Mora::Cv { consonant, locus, .. }) = out.last().copied() {
+                if let Some(Mora::Cv { consonant, locus, vot_ms, .. }) = out.last().copied() {
                     let n = out.len();
-                    out[n - 1] = Mora::Cv { consonant, vowel: vowel_of(v), locus };
+                    out[n - 1] = Mora::Cv { consonant, vowel: vowel_of(v), locus, vot_ms };
                 } else {
                     skipped += 1;
                 }
@@ -227,6 +272,7 @@ pub fn moras_from_kana(s: &str) -> (Vec<Mora>, usize) {
                     consonant: consonant_of(row),
                     vowel: vowel_of(vi),
                     locus: locus_of(row),
+                    vot_ms: vot_ms_of(row),
                 }),
                 None => skipped += 1,
             },
@@ -253,12 +299,16 @@ pub fn synth_utterance(moras: &[Mora], f0_hz: f64, noise: &mut LfsrNoise) -> Vec
     let mut last_vowel: Option<Vowel> = None;
     for m in moras {
         match *m {
-            Mora::Cv { consonant, vowel, locus } => {
+            Mora::Cv { consonant, vowel, locus, vot_ms } => {
                 if consonant != Consonant::None {
                     out.extend(synth_consonant_banded(consonant, CONSONANT_MS, f0_hz, noise));
-                    // **フォルマント遷移** (2026-08-27): 子音の調音位置を後続母音の
-                    // フォルマントの動きに転写する。`locus` が None なら従来と同一波形。
-                    out.extend(synth_vowel_f0_glide(&vowel, f0_hz, MORA_MS - CONSONANT_MS, locus));
+                    // **フォルマント遷移 + VOT** (2026-08-27):
+                    //   遷移 = 子音の調音位置を後続母音のフォルマントの動きに転写する。
+                    //   VOT  = 無声破裂音の解放後、声帯振動が始まるまでを気音にする。
+                    // どちらも 0/None なら従来と同一波形。
+                    out.extend(synth_vowel_f0_full(
+                        &vowel, f0_hz, MORA_MS - CONSONANT_MS, locus, vot_ms, noise,
+                    ));
                 } else {
                     out.extend(synth_vowel_f0(&vowel, f0_hz, MORA_MS));
                 }

@@ -32,22 +32,28 @@
 //! - **G89d 決定論性**: 先頭 500 モーラを 2 回走らせて一致。
 //! - **G89e コーパスの内容は一切出力しない**: **数値のみ。**
 //!
-//! ## この測定の既知の欠陥 (**実測前に書いておく**)
+//! ## 私が犯した欠陥とその訂正 (2026-08-27・**記録として残す**)
 //!
-//! **M1 の入力数が現在の M0.5 と噛み合っていない。**
-//! `for_m1_cn_80` は入力 164 だが `CochlearNucleus` の出力は 84 (Octopus 4 + Bushy 40 +
-//! Stellate 40)。**80 本の入力ニューロンが一度も駆動されない。**
-//! (44 = 4+20+20 は 20 帯域時代、164 = 4+80+80 は 80 帯域時代の設定で、
-//!  40 帯域の 84 に合う設定が存在しない。**パラメータを発明しない**ので噛み合わせない。)
+//! **初版はここに `for_m1_cn_80` (入力 164) をハードコードしていた。**
+//! `CochlearNucleus` の出力は 84 (Octopus 4 + Bushy 40 + Stellate 40) なので
+//! **80 本の入力ニューロンが一度も駆動されなかった。**
 //!
-//! したがって **刈込の「量」は私の配線ミスマッチに汚染される。**
-//! ただし **G89a が見るのは「いつ始まるか」であって「いくつ死ぬか」ではない**ので、
-//! ミスマッチに対して頑健である。**量の方は判定に使わない。**
+//! さらに私は「40 帯域の 84 に合う設定が存在しない」と記録したが、**それは誤りだった。**
+//! **`for_m1_cn_40()` が n_input = 84 でちょうど存在する。**
+//! 他のプローブ (`m0_cn_m1_pipeline` 等) は元から `N_CN_OUTPUT == 164` で
+//! 実行時に選び分けていた。**私だけがハードコードしていた。**
+//!
+//! 初版の測定への影響: 刈込開始時に一斉死した **6,400 本 = 未駆動入力 80 × input_fanout 80**
+//! が丸ごと人工物だった。**開始時刻 (G89a) は算術で決まるので影響を受けない**が、
+//! **量は汚染されていた。**
+//!
+//! 訂正: 実行時に選び分け、さらに **不一致なら panic する assert** を置いた。
+//! **同じ間違いが二度起きないようにするのが本当の修正である。**
 //!
 //! CLI: corpus_run   (DRPNN_CORPUS_MORAS でモーラ数・既定 12000)
 
 use spiking_brain::phase2_f::cochlea::{Cochlea, SAMPLES_PER_STEP};
-use spiking_brain::phase2_f::cochlear_nucleus::CochlearNucleus;
+use spiking_brain::phase2_f::cochlear_nucleus::{CochlearNucleus, N_CN_OUTPUT};
 use spiking_brain::phase2_f::kana::{moras_from_kana, synth_utterance, Mora, MORA_MS};
 use spiking_brain::phase2_f::phoneme_synth::LfsrNoise;
 use spiking_brain::phase2_f::thermo_network::{ThermoNetwork, ThermoNetworkConfig};
@@ -102,7 +108,23 @@ struct Snapshot { mora: usize, alive: usize, open: usize, fired: usize }
 
 /// 連続で流す。**一度もリセットしない。**
 fn run(moras: &[Mora], checkpoint_every: usize) -> Vec<Snapshot> {
-    let mut net = ThermoNetwork::new(ThermoNetworkConfig::for_m1_cn_80());
+    // **N_CN_OUTPUT に合う設定を実行時に選ぶ。**
+    // 合わない設定を渡すと `ThermoNetwork::step` の `if k < self.input_neurons.len()` が
+    // **無言で入力を捨てる**か、逆に**駆動されない入力ニューロンが残る**。
+    // (2026-08-27 の私の欠陥: ここに for_m1_cn_80 をハードコードしていた。
+    //  他のプローブは元から実行時に選び分けていたので、**私だけの間違いだった。**)
+    let cfg = if N_CN_OUTPUT == 164 {
+        ThermoNetworkConfig::for_m1_cn_80()
+    } else {
+        ThermoNetworkConfig::for_m1_cn_40()
+    };
+    // **不一致を二度と無言で通さない。**
+    assert_eq!(
+        cfg.n_input, N_CN_OUTPUT,
+        "M1 の入力数 {} と M0.5 の出力数 {} が一致しない。合う設定が無いなら測定を止める。",
+        cfg.n_input, N_CN_OUTPUT
+    );
+    let mut net = ThermoNetwork::new(cfg);
     let mut co = Cochlea::new();
     let mut cn = CochlearNucleus::new();
     let mut noise = LfsrNoise::new(SEED);
@@ -158,14 +180,16 @@ fn main() {
     println!("  G89b 平衡に達するか (記述) / G89c 多様性 (記述)");
     println!("  G89d 決定論性 / **G89e コーパスの内容は一切出力しない (数値のみ)**");
     println!();
-    println!("【この測定の既知の欠陥・実測前に書いた】");
-    println!("  **M1 の入力数が現在の M0.5 と噛み合っていない。**");
-    println!("  for_m1_cn_80 は入力 164 だが CochlearNucleus の出力は 84 (4+40+40)。");
-    println!("  **80 本の入力ニューロンが一度も駆動されない。**");
-    println!("  (44=4+20+20 は 20帯域時代・164=4+80+80 は 80帯域時代。40帯域の 84 に合う");
-    println!("   設定が存在しない。**パラメータを発明しないので噛み合わせない。**)");
-    println!("  したがって **刈込の「量」は配線ミスマッチに汚染される。**");
-    println!("  **G89a が見るのは「いつ」であって「いくつ」ではないので頑健。量は判定に使わない。**");
+    println!("【私が犯した欠陥とその訂正・記録として残す】");
+    println!("  初版は for_m1_cn_80 (入力164) をハードコードし、M0.5 の出力 84 に対して");
+    println!("  **80本の入力ニューロンが一度も駆動されなかった。**");
+    println!("  さらに「84 に合う設定が存在しない」と記録したが **それは誤り**。");
+    println!("  **for_m1_cn_40() が n_input=84 でちょうど存在する。**");
+    println!("  他のプローブは元から実行時に選び分けていた。**私だけがハードコードしていた。**");
+    println!("  影響: 一斉死した 6,400本 = 未駆動80 × input_fanout 80 が丸ごと人工物。");
+    println!("  **開始時刻は算術で決まるので無傷だが、量は汚染されていた。**");
+    println!("  訂正: 実行時に選び分け + **不一致なら panic する assert**。");
+    println!("  **同じ間違いが二度起きないようにするのが本当の修正。**");
 
     let t0 = std::time::Instant::now();
     let (moras, kinds, skipped) = load_moras(n_moras);

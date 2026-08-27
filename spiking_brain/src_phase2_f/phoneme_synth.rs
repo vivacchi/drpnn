@@ -336,15 +336,68 @@ pub fn synth_vowel_f0(vowel: &Vowel, f0_hz: f64, duration_ms: f64) -> Vec<i32> {
 /// (`TRANSITION_MS` かけて)。帯域幅・利得は動かさない。
 /// **RMS 正規化は `synth_vowel` を基準にしており locus に依存しない**ので、
 /// 遷移の有無で音量は変わらない = 音量では当てられない。
+/// `synth_vowel_f0_full` に気音なしを渡すのと同じ。**既存の呼び出しは一切変わらない。**
 pub fn synth_vowel_f0_glide(
     vowel: &Vowel,
     f0_hz: f64,
     duration_ms: f64,
     locus_hz: Option<[f64; 3]>,
 ) -> Vec<i32> {
+    let mut unused = LfsrNoise::new(1);
+    synth_vowel_f0_full(vowel, f0_hz, duration_ms, locus_hz, 0.0, &mut unused)
+}
+
+/// **VOT (気音) つきの母音合成** (2026-08-27)。
+///
+/// `aspiration_ms` = 破裂の解放から声帯振動が始まるまでの時間 (Voice Onset Time)。
+/// 0 なら気音なし = `synth_vowel_f0_glide` と**完全に同一の波形**。
+///
+/// ## なぜ必要か
+///
+/// §14.26 で「連続にすると有声性の伝達情報量が 76.8% → 3.3% に崩壊する」が出た。
+/// 原因は**本実装の有声性の手がかりが voice bar (閉鎖中の声帯振動) 1 本しか無く、
+/// それが最も文脈に弱い手がかりだった**こと。連続では直前の母音の低域に埋もれる。
+///
+/// 実音声で有声/無声を分ける最も強い手がかりは **VOT** である。
+/// 無声破裂音は解放のあと声帯振動が始まるまで**気音** (声門での乱流雑音が
+/// 声道を通ったもの) が入る。有声破裂音には入らない (むしろ解放前から声帯が鳴っている)。
+///
+/// **VOT は解放「後」の手がかりなので、フォルマント遷移と同じく連続発話でも生き残る。**
+/// これが voice bar との決定的な違いである。
+///
+/// ## 何が動くか
+///
+/// 最初の `aspiration_ms` の間、共鳴器を**声帯パルス列でなく雑音で駆動する**。
+/// 共鳴器・遷移・放射・正規化は一切変えない。
+/// **物理的にこれが気音そのものである** (声門の乱流が同じ声道を通る)。
+///
+/// 雑音の RMS は**声帯パルス列の RMS に合わせる**。
+/// 合わせないと「気音の区間だけ音量が違う」ことになり、
+/// **有声性を音量で当てられてしまう** (§14.27 の G87c で学んだ交絡)。
+/// 手がかりを**周期性の有無**だけに絞るための措置である。
+pub fn synth_vowel_f0_full(
+    vowel: &Vowel,
+    f0_hz: f64,
+    duration_ms: f64,
+    locus_hz: Option<[f64; 3]>,
+    aspiration_ms: f64,
+    noise: &mut LfsrNoise,
+) -> Vec<i32> {
     let n_samples = (duration_ms * SAMPLE_RATE_HZ / 1000.0) as usize;
     // 声帯源。共鳴器のピーク利得で振幅を作るので、源は控えめにする。
-    let source = glottal_pulse_train(f0_hz, n_samples, 4096);
+    let mut source = glottal_pulse_train(f0_hz, n_samples, 4096);
+    // **気音 (VOT)**: 最初の aspiration_ms を雑音駆動に差し替える。
+    // 声帯パルス列と同じ RMS に揃えるので、**手がかりは周期性の有無だけ**になる。
+    let n_asp = ((aspiration_ms * SAMPLE_RATE_HZ / 1000.0) as usize).min(n_samples);
+    if n_asp > 0 {
+        let src_rms = rms_i64(&source);
+        let mut asp: Vec<i32> = (0..n_asp).map(|_| noise.next_sample()).collect();
+        let a_rms = rms_i64(&asp);
+        if a_rms > 0 && src_rms > 0 {
+            for v in asp.iter_mut() { *v = ((*v as i64) * src_rms / a_rms) as i32; }
+        }
+        source[..n_asp].copy_from_slice(&asp);
+    }
     let mut resonators: Vec<FormantResonator> = (0..3)
         .map(|k| {
             FormantResonator::new(
