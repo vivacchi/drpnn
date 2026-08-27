@@ -422,29 +422,25 @@ pub fn synth_vowel_f0_glide(
 /// 合わせないと「気音の区間だけ音量が違う」ことになり、
 /// **有声性を音量で当てられてしまう** (§14.27 の G87c で学んだ交絡)。
 /// 手がかりを**周期性の有無**だけに絞るための措置である。
-pub fn synth_vowel_f0_full(
-    vowel: &Vowel,
-    f0_hz: f64,
-    duration_ms: f64,
-    locus_hz: Option<[f64; 3]>,
-    aspiration_ms: f64,
-    noise: &mut LfsrNoise,
-) -> Vec<i32> {
-    let n_samples = (duration_ms * SAMPLE_RATE_HZ / 1000.0) as usize;
-    // 声帯源。共鳴器のピーク利得で振幅を作るので、源は控えめにする。
-    let mut source = glottal_pulse_train(f0_hz, n_samples, 4096);
-    // **気音 (VOT)**: 最初の aspiration_ms を雑音駆動に差し替える。
-    // 声帯パルス列と同じ RMS に揃えるので、**手がかりは周期性の有無だけ**になる。
-    let n_asp = ((aspiration_ms * SAMPLE_RATE_HZ / 1000.0) as usize).min(n_samples);
-    if n_asp > 0 {
-        let src_rms = rms_i64(&source);
-        let mut asp: Vec<i32> = (0..n_asp).map(|_| noise.next_sample()).collect();
-        let a_rms = rms_i64(&asp);
-        if a_rms > 0 && src_rms > 0 {
-            for v in asp.iter_mut() { *v = ((*v as i64) * src_rms / a_rms) as i32; }
-        }
-        source[..n_asp].copy_from_slice(&asp);
-    }
+/// **唇からの放射 (一次差分) を掛けた後の** RMS を、先頭 `n` サンプルについて測る。
+///
+/// 気音の量を合わせる場所は**放射の後**でなければならない。
+/// `normalize_rms` が掛かるのは放射の後の `raw` であり、
+/// **放射は一次差分なので高域を持ち上げる = 雑音 (気音) を有声部よりずっと強く増幅する。**
+/// (2026-08-27: 共鳴器の出口で合わせたら逆に悪化した。**一段手前だった。**)
+fn radiated_rms(v: &[i32], n: usize) -> i64 {
+    let n = n.min(v.len());
+    let mut d = Vec::with_capacity(n);
+    let mut prev = 0i32;
+    for i in 0..n { d.push(v[i].saturating_sub(prev)); prev = v[i]; }
+    rms_i64(&d)
+}
+
+/// 声道 (3 共鳴器 + フォルマント遷移) に源を通す。**まっさらな共鳴器から始める。**
+///
+/// 気音の量を**出力側で**合わせるために、同じ声道を複数回回す必要があるので切り出した。
+fn vocal_tract(source: &[i32], vowel: &Vowel, locus_hz: Option<[f64; 3]>) -> Vec<i32> {
+    let n_samples = source.len();
     let mut resonators: Vec<FormantResonator> = (0..3)
         .map(|k| {
             FormantResonator::new(
@@ -455,9 +451,9 @@ pub fn synth_vowel_f0_full(
             )
         })
         .collect();
-    let mut voiced = Vec::with_capacity(n_samples);
     // 遷移の長さ (サンプル数)。母音が短ければそれに収める。
     let n_trans = ((TRANSITION_MS * SAMPLE_RATE_HZ / 1000.0) as usize).min(n_samples);
+    let mut out = Vec::with_capacity(n_samples);
     for (i, &x) in source.iter().enumerate() {
         if let Some(locus) = locus_hz {
             if i < n_trans && n_trans > 0 {
@@ -465,21 +461,79 @@ pub fn synth_vowel_f0_full(
                 for (k, r) in resonators.iter_mut().enumerate() {
                     let target = vowel.formants_hz[k];
                     let f = locus[k] + (target - locus[k]) * (i as f64) / (n_trans as f64);
-                    r.retune(
-                        f,
-                        vowel.bandwidths_hz[k],
-                        vowel.amplitudes[k] as f64 / 4096.0,
-                        SAMPLE_RATE_HZ,
-                    );
+                    r.retune(f, vowel.bandwidths_hz[k],
+                             vowel.amplitudes[k] as f64 / 4096.0, SAMPLE_RATE_HZ);
                 }
             }
         }
         let mut sample = 0i32;
-        for r in resonators.iter_mut() {
-            sample = sample.saturating_add(r.process(x));
-        }
-        voiced.push(sample);
+        for r in resonators.iter_mut() { sample = sample.saturating_add(r.process(x)); }
+        out.push(sample);
     }
+    out
+}
+
+pub fn synth_vowel_f0_full(
+    vowel: &Vowel,
+    f0_hz: f64,
+    duration_ms: f64,
+    locus_hz: Option<[f64; 3]>,
+    aspiration_ms: f64,
+    noise: &mut LfsrNoise,
+) -> Vec<i32> {
+    let n_samples = (duration_ms * SAMPLE_RATE_HZ / 1000.0) as usize;
+    // 声帯源。共鳴器のピーク利得で振幅を作るので、源は控えめにする。
+    let pulse = glottal_pulse_train(f0_hz, n_samples, 4096);
+    let n_asp = ((aspiration_ms * SAMPLE_RATE_HZ / 1000.0) as usize).min(n_samples);
+
+    // **気音 (VOT)**: 最初の aspiration_ms を雑音駆動に差し替える。
+    //
+    // ## 2026-08-27 の訂正 — 合わせる場所が違っていた
+    //
+    // 初版は雑音の RMS を**声帯パルス列 (共鳴器の手前)** に合わせ、docstring に
+    // 「手がかりを周期性の有無だけに絞る」と書いた。**これは成立していなかった。**
+    // **共鳴器と放射微分は周期パルスと雑音をまったく違う利得で通す**ので、
+    // 源で合わせても**出力では合わない**。
+    //
+    // 出荷コードでの実測 (§14.32): モーラ末 30ms の RMS が
+    // か 6551 → 2699 / が 6551 のまま。**無声だけが母音の後半で静かになり、
+    // 有声性が音量で読めた。** VOT は調音位置で決まるので**調音位置も音量で読めた。**
+    // (G90c が PASS したのは**モーラ全体**の RMS を見ていたからで、
+    //  全体は `normalize_rms` で揃うから当然だった。壊れていたのは**時間内の配分**。)
+    //
+    // 訂正: **放射まで通した後で合わせる。** 同じ窓で
+    //   (a) 純粋な声帯源を声道+放射に通した RMS
+    //   (b) 雑音を声道+放射に通した RMS
+    // を測り、比で雑音源を補正する。系は線形なので 1 回の補正で足りる。
+    //
+    // **1 度目の訂正は共鳴器の出口で合わせて逆に悪化した (11.5dB → 15.4dB)。**
+    // `normalize_rms` が掛かるのは**放射の後**であり、
+    // **放射は一次差分なので雑音を有声部よりずっと強く増幅する。一段手前だった。**
+    // **これで気音と有声部は声道の出口で同じ音量になり、手がかりは周期性の有無だけになる。**
+    let source = if n_asp == 0 {
+        pulse
+    } else {
+        let voiced_ref = vocal_tract(&pulse, vowel, locus_hz);
+        let ref_rms = radiated_rms(&voiced_ref, n_asp);
+        let mut asp: Vec<i32> = (0..n_asp).map(|_| noise.next_sample()).collect();
+        // 粗合わせ (源の RMS) — 桁を合わせておかないと整数の丸めで精度を失う
+        let (src_rms, a_rms) = (rms_i64(&pulse), rms_i64(&asp));
+        if a_rms > 0 && src_rms > 0 {
+            for v in asp.iter_mut() { *v = ((*v as i64) * src_rms / a_rms) as i32; }
+        }
+        // **出力で測って補正する**
+        let mut probe = pulse.clone();
+        probe[..n_asp].copy_from_slice(&asp);
+        let probe_out = vocal_tract(&probe, vowel, locus_hz);
+        let probe_rms = radiated_rms(&probe_out, n_asp);
+        if probe_rms > 0 && ref_rms > 0 {
+            for v in asp.iter_mut() { *v = ((*v as i64) * ref_rms / probe_rms) as i32; }
+        }
+        let mut s = pulse;
+        s[..n_asp].copy_from_slice(&asp);
+        s
+    };
+    let voiced = vocal_tract(&source, vowel, locus_hz);
 
     // **唇からの放射特性** (2026-08-26 追加)。
     //
