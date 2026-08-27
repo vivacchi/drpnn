@@ -264,6 +264,51 @@ impl FormantResonator {
     }
 }
 
+/// **声帯パルスの速度商** (rise ÷ fall) [%]。(2026-08-27)
+///
+/// Rosenberg (1971) の声帯流モデルでは、**開く相は閉じる相より長い** (速度商 2〜3)。
+/// 開放商 (`GLOTTAL_OPEN_QUOTIENT_PERCENT`) は既に Rosenberg を引いていたのに、
+/// **速度商だけが 1 (左右対称) のままだった。**
+///
+/// ## なぜ直すか
+///
+/// **左右対称の三角波の DTFT は Dirichlet 核の 2 乗であり、厳密な零点の櫛を持つ。**
+/// 零点は `k · SAMPLE_RATE / rise` に立ち、`rise` は小さな整数なので
+/// 500 / 667 / 800 / 1000 Hz といった「切りのいい」周波数に固定される。
+/// これが `vowels()` のフォルマント表 (300/350/500/800/850/900/1300/2000/2300/2400/2700/3000)
+/// と衝突し、**F0 ごとに違うフォルマントが消える。**
+///
+/// 出荷コードでの実測 (2026-08-27・§14.32): /a/ の M0 argmax が
+/// F0=100 で 820Hz (F1) → F0=130/150/160 で **293Hz** → F0=200 で 820Hz と飛ぶ。
+/// **5 母音のうち /a/ の 2 点を除き、場所符号のピークはフォルマントではなかった。**
+///
+/// **非対称にすると厳密零点は消える** (Dirichlet 核の 2 乗でなくなる)。
+///
+/// **100 = 左右対称 = 2026-08-27 以前の挙動。** A/B のために残してある。
+pub const GLOTTAL_SPEED_QUOTIENT_PERCENT: usize = 200;
+
+static GLOTTAL_SQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(usize::MAX);
+
+/// 速度商 [%]。初回だけ環境変数 `DRPNN_GLOTTAL_SQ` を読む。**乱数は使わない。**
+pub fn glottal_speed_quotient_percent() -> usize {
+    use std::sync::atomic::Ordering;
+    let v = GLOTTAL_SQ.load(Ordering::Relaxed);
+    if v == usize::MAX {
+        let q = std::env::var("DRPNN_GLOTTAL_SQ").ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(GLOTTAL_SPEED_QUOTIENT_PERCENT)
+            .max(1);
+        GLOTTAL_SQ.store(q, Ordering::Relaxed);
+        return q;
+    }
+    v
+}
+
+/// 速度商を実行時に切り替える (対照実験用)。**100 で従来と同一波形。**
+pub fn set_glottal_speed_quotient(percent: usize) {
+    GLOTTAL_SQ.store(percent.max(1), std::sync::atomic::Ordering::Relaxed);
+}
+
 /// 声帯パルス列の開放商 (パルス幅 / 周期)。Rosenberg モデルの標準値付近。
 pub const GLOTTAL_OPEN_QUOTIENT_PERCENT: usize = 40;
 
@@ -277,7 +322,9 @@ pub const GLOTTAL_OPEN_QUOTIENT_PERCENT: usize = 40;
 pub fn glottal_pulse_train(f0_hz: f64, n_samples: usize, amplitude: i32) -> Vec<i32> {
     let period = (SAMPLE_RATE_HZ / f0_hz).round() as usize;
     let width = (period * GLOTTAL_OPEN_QUOTIENT_PERCENT / 100).max(2);
-    let rise = width / 2;
+    // **速度商つきの非対称パルス** (2026-08-27)。sq=100 で `width / 2` = 従来と厳密に同一。
+    let sq = glottal_speed_quotient_percent();
+    let rise = (width * sq / (sq + 100)).clamp(1, width.saturating_sub(1).max(1));
     let mut out = Vec::with_capacity(n_samples);
     for i in 0..n_samples {
         let phase = i % period;
