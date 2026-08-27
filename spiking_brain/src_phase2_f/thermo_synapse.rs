@@ -78,6 +78,15 @@ pub struct ThermoSynapse {
     pub decay_counter: i32,
     /// vitality 減衰用カウンタ (VITALITY_DECAY_INTERVAL ごとに vitality -= 1)
     pub vitality_counter: i32,
+    /// **LTP が起きた回数** (2026-08-27 追加・計測専用。振る舞いには一切使わない)。
+    ///
+    /// §14.43 で「M1 は入力から切れていた」が出た。診断が 2 つに分かれる:
+    /// ① 減衰が速すぎる (強化は起きているが追いつかない)
+    /// ② そもそも強化が一度も起きていない (入力が皮質を発火させられない)
+    /// **直し方が正反対なので、直す前にどちらかを確定させる。**
+    pub n_ltp: u32,
+    /// **LTD が起きた回数** (同上)。
+    pub n_ltd: u32,
     /// 因果窓 (この値より小さい spike_trace が「最近発火」 と判定される)
     /// M1: 160 step (80ms)、 M2: 320 step (160ms 音節スケール)
     pub causal_window: i32,
@@ -101,6 +110,8 @@ impl ThermoSynapse {
             alive: VITALITY_INITIAL > 0,
             decay_counter: 0,
             vitality_counter: 0,
+            n_ltp: 0,
+            n_ltd: 0,
             causal_window: CAUSAL_WINDOW,  // M1 default、 M2 では 320 に書き換える
             decay_interval: DECAY_INTERVAL,            // default 1000、 config で上書き
             vit_decay_interval: VITALITY_DECAY_INTERVAL, // default 10000、 config で上書き
@@ -112,6 +123,7 @@ impl ThermoSynapse {
     pub fn update_on_post_spike_trace(&mut self, pre_spike_trace: i32) {
         if !self.alive { return; }
         if pre_spike_trace > 0 && pre_spike_trace < self.causal_window {
+            self.n_ltp = self.n_ltp.saturating_add(1);
             self.conductance += LTP_AMOUNT;
             if self.conductance > CONDUCTANCE_MAX { self.conductance = CONDUCTANCE_MAX; }
         }
@@ -123,6 +135,7 @@ impl ThermoSynapse {
     pub fn update_on_pre_spike_trace(&mut self, post_spike_trace: i32) {
         if !self.alive { return; }
         if post_spike_trace > 0 && post_spike_trace < self.causal_window {
+            self.n_ltd = self.n_ltd.saturating_add(1);
             self.conductance -= LTD_AMOUNT;
             if self.conductance < 0 { self.conductance = 0; }
         }
