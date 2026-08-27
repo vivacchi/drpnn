@@ -331,3 +331,7 @@ path = "src_phase2_f/bin/vot_check.rs"
 [[bin]]
 name = "corpus_analysis"
 path = "src_phase2_f/bin/corpus_analysis.rs"
+
+[[bin]]
+name = "audit_verify"
+path = "src_phase2_f/bin/audit_verify.rs"
