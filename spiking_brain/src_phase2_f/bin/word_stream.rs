@@ -50,13 +50,40 @@ use spiking_brain::phase2_f::cochlear_nucleus::{CochlearNucleus, N_CN_OUTPUT};
 use spiking_brain::phase2_f::kana::{moras_from_kana, synth_utterance};
 use spiking_brain::phase2_f::phoneme_synth::LfsrNoise;
 
-/// **3 モーラの実在語。モーラ数を揃えてあるので整列アルゴリズムが要らない。**
-const WORDS: &[&str] = &[
-    "あたま", "こころ", "さかな", "たまご",
-    "ひかり", "みどり", "くるま", "てがみ",
-    "ことば", "なまえ", "せかい", "ちから",
-    "かたち", "いのち", "さくら", "みかん",
+/// **最小対 (1 モーラだけ違う 3 モーラの実在語) 16 組 = 32 語。**
+///
+/// ## なぜ最小対にしたか (2026-08-27・**理由を明記する**)
+///
+/// 最初は無関係な 16 語で測り、**フレーム列で 100.0% に張り付いた** (§14.39)。
+/// **天井に張り付いた計器では、連続合成への作り直しが何を変えたかを測れない。**
+///
+/// **難しくしたのは「勝つため」ではなく「測れるようにするため」である。**
+/// §14.39 の 16 語の結果はそのまま記録に残してある。
+///
+/// モーラ数は揃えたままなので、**整列アルゴリズムは依然として要らない。**
+const PAIRS: &[(&str, &str)] = &[
+    ("こころ", "ところ"),   // 1 モーラ目
+    ("からだ", "かなだ"),   // 2 モーラ目
+    ("たまご", "たなご"),   // 2
+    ("てがみ", "てあみ"),   // 2
+    ("せかい", "せたい"),   // 2
+    ("みどり", "みのり"),   // 2
+    ("かたち", "かたな"),   // 3
+    ("ひかり", "ひかる"),   // 3
+    ("さかな", "さかや"),   // 3
+    ("くるま", "くるみ"),   // 3
+    ("なまえ", "なまり"),   // 3
+    ("ちから", "ちかく"),   // 3
+    ("いのち", "いのり"),   // 3
+    ("みかん", "みかた"),   // 3
+    ("あたま", "あたり"),   // 3
+    ("からす", "からて"),   // 3
 ];
+
+/// 平坦化した単語列。`WORDS[2k]` と `WORDS[2k+1]` が最小対をなす。
+fn words() -> Vec<&'static str> {
+    PAIRS.iter().flat_map(|&(a, b)| [a, b]).collect()
+}
 
 const F0S: [f64; 4] = [100.0, 130.0, 160.0, 200.0];
 const N_VAR: usize = 4;
@@ -73,8 +100,8 @@ fn frames(
     w: usize, v: usize, co: &mut Cochlea, cn: &mut CochlearNucleus,
 ) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
     let mut n = LfsrNoise::new(utterance_seed(w, v));
-    let (m, sk) = moras_from_kana(WORDS[w]);
-    assert_eq!(sk, 0, "未対応の単語: {}", WORDS[w]);
+    let (m, sk) = moras_from_kana(words()[w]);
+    assert_eq!(sk, 0, "未対応の単語: {}", words()[w]);
     let wave = synth_utterance(&m, F0S[v], &mut n);
     let (mut m0f, mut cnf) = (Vec::new(), Vec::new());
     let (mut m0a, mut cna) = (vec![0f64; N_BANDS], vec![0f64; N_CN_OUTPUT]);
@@ -133,6 +160,27 @@ fn accuracy(v: &[(usize, Vec<f64>)]) -> f64 {
     ok as f64 / n as f64 * 100.0
 }
 
+/// 1-NN の誤答のうち、**最小対の相手**だった割合。誤りが原理的かを見る。
+/// `WORDS[2k]` と `WORDS[2k+1]` が対なので、`w ^ 1` が相手。
+fn partner_share(v: &[(usize, Vec<f64>)]) -> (usize, usize) {
+    let n = v.len();
+    let (mut wrong, mut partner) = (0usize, 0usize);
+    for i in 0..n {
+        let mut best = f64::NEG_INFINITY;
+        let mut arg = 0usize;
+        for j in 0..n {
+            if j == i { continue; }
+            let c = cosine(&v[i].1, &v[j].1);
+            if c > best { best = c; arg = v[j].0; }
+        }
+        if arg != v[i].0 {
+            wrong += 1;
+            if arg == (v[i].0 ^ 1) { partner += 1; }
+        }
+    }
+    (partner, wrong)
+}
+
 /// 同一クラスどうし / 異クラスどうし の平均コサイン
 fn within_between(v: &[(usize, Vec<f64>)]) -> (f64, f64) {
     let (mut w, mut nw, mut b, mut nb) = (0f64, 0usize, 0f64, 0usize);
@@ -151,7 +199,7 @@ fn chance(n_class: usize, per_class: usize) -> f64 {
 }
 
 struct Arm { m0_avg: f64, m0_seq: f64, cn_avg: f64, cn_seq: f64,
-             seq_w: f64, seq_b: f64, avg_w: f64, avg_b: f64 }
+             seq_w: f64, seq_b: f64, avg_w: f64, avg_b: f64, partner: usize, wrong: usize }
 
 /// `warm` が true なら単語をまたいで状態を持ち越す (平衡アーム)
 fn eval(warm: bool) -> Arm {
@@ -160,10 +208,10 @@ fn eval(warm: bool) -> Arm {
     let (mut co, mut cn) = (Cochlea::new(), CochlearNucleus::new());
     if warm {
         // ウォームアップ: 全単語を 1 周流してから測る
-        for v in 0..N_VAR { for w in 0..WORDS.len() { let _ = frames(w, v, &mut co, &mut cn); } }
+        for v in 0..N_VAR { for w in 0..words().len() { let _ = frames(w, v, &mut co, &mut cn); } }
     }
     for v in 0..N_VAR {
-        for w in 0..WORDS.len() {
+        for w in 0..words().len() {
             let (m0f, cnf) = if warm {
                 frames(w, v, &mut co, &mut cn)
             } else {
@@ -176,12 +224,13 @@ fn eval(warm: bool) -> Arm {
             cn_seq.push((w, flattened(&cnf)));
         }
     }
+    let ps = partner_share(&cn_seq);
     let (sw, sb) = within_between(&cn_seq);
     let (aw, ab) = within_between(&cn_avg);
     Arm {
         m0_avg: accuracy(&m0_avg), m0_seq: accuracy(&m0_seq),
         cn_avg: accuracy(&cn_avg), cn_seq: accuracy(&cn_seq),
-        seq_w: sw, seq_b: sb, avg_w: aw, avg_b: ab,
+        seq_w: sw, seq_b: sb, avg_w: aw, avg_b: ab, partner: ps.0, wrong: ps.1,
     }
 }
 
@@ -207,10 +256,10 @@ fn main() {
     println!("  定常部だけ見れば「あーーーー」と「ーーーーーー」が区別できないのと同じこと。");
     println!("  **外れたら『情報は変化にある』という読みが間違っている。外れ方が情報になる。**");
 
-    let ch = chance(WORDS.len(), N_VAR);
+    let ch = chance(words().len(), N_VAR);
     println!();
     println!("  単語 {} 語 × F0 {} 変種 = {} 条件。1 フレーム = 10ms。",
-             WORDS.len(), N_VAR, WORDS.len() * N_VAR);
+             words().len(), N_VAR, words().len() * N_VAR);
     println!("  **チャンス = {:.2}%** (同点棄却つき 1-NN・棄却は不正解として計上)", ch);
 
     let cold = eval(false);
@@ -241,7 +290,7 @@ fn main() {
     println!("  *同一単語(=再現性)が高く、異単語(=弁別性)が低いほどよい。差が大きいほど分離している。*");
 
     // --- G94e 退化ベースライン ---
-    let deg: Vec<(usize, Vec<f64>)> = (0..WORDS.len() * N_VAR)
+    let deg: Vec<(usize, Vec<f64>)> = (0..words().len() * N_VAR)
         .map(|i| (i / N_VAR, vec![1.0f64; 64])).collect();
     println!();
     println!("  G94e 退化ベースライン (全条件が同一ベクトル) -> {:.2}% -> {}",
@@ -251,6 +300,9 @@ fn main() {
     println!("  G94f 決定論性 -> {}",
              if (again.cn_seq - cold.cn_seq).abs() < 1e-12 { "PASS" } else { "**FAIL**" });
 
+    println!();
+    println!("  **誤答 {} 件のうち最小対の相手だったのは {} 件** (原理的な誤りか無関係な誤りか)",
+             cold.wrong, cold.partner);
     println!();
     println!("  【この計器が答えないこと】**いまの刺激はストリームではない** (§14.38)。");
     println!("  **これはその上でのベースラインである。**連続合成に作り直したあと、");
