@@ -273,8 +273,14 @@ fn main() {
     println!();
     println!("  コーパス {} モーラ / **{} 種類のかなが鳴った**。**内容は出力しない。**", moras.len(), kinds);
 
-    let cfg = if N_CN_OUTPUT == 164 { ThermoNetworkConfig::for_m1_cn_80() }
+    let mut cfg = if N_CN_OUTPUT == 164 { ThermoNetworkConfig::for_m1_cn_80() }
               else { ThermoNetworkConfig::for_m1_cn_40() };
+    // **再現性の確認用** (2026-08-27): 網の初期化シードを変えて、結果が
+    // 特定の初期網の偶然でないかを確かめる。既定は従来の 302。
+    if let Some(seed) = std::env::var("DRPNN_M1_SEED").ok().and_then(|v| v.parse().ok()) {
+        cfg.seed = seed;
+        println!("  **網の初期化シード = {} (既定 302 から変更)**", seed);
+    }
     assert_eq!(cfg.n_input, N_CN_OUTPUT, "M1 の入力数と M0.5 の出力数が一致しない");
     let mut net = ThermoNetwork::new(cfg);
     let (mut co, mut cn) = (Cochlea::new(), CochlearNucleus::new());
