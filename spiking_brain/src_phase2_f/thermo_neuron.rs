@@ -24,6 +24,53 @@
 /// 3: 4 回バースト発火 + 2-3 step 不応期 (機能的不応期相当)
 pub const ENTHALPY_PER_SPIKE: i32 = 3;
 
+/// 入力ニューロンに**慣化 (local_entropy → 閾値上昇)** を持たせるか。(2026-08-27・F 案)
+///
+/// ## なぜ
+///
+/// §14.44 で実測: **入力ニューロン 0.0605 発火/step ≈ 121 Hz /
+/// 皮質ニューロン 0.0028 ≈ 5.6 Hz = 比 21.2 倍。**
+/// LTD は「pre 発火時に post の痕跡が生きていたら」なので、
+/// **pre 側が 21 倍速いと LTD の機会だけが一方的に増える。**
+///
+/// **M1 には既に恒常性が入っている**: `local_entropy` が発火のたびに溜まり、
+/// `effective_threshold = threshold_base + local_entropy` で閾値を上げる
+/// (= 内在興奮性による発火率恒常性)。
+///
+/// **だが入力ニューロンだけ、それが切ってある**:
+/// `entropy_per_spike: 0` **かつ** `generates_entropy: false`。**両方切らないと効かない。**
+///
+/// **つまり 21.2 倍の非対称は、恒常性が足りないのではなく、片側で意図的に切ってある結果である。**
+/// 恒常性を新設する前に、**既にあるものを両側で効かせたらどうなるか**を測る。
+///
+/// 値は皮質の興奮性ニューロンと同じ 10 を使う (**新しい値の発明ではなく、同じ機構の既存値**)。
+///
+/// **既定 false (= 従来)。** `DRPNN_INPUT_HABITUATION=1` で有効 (同じビルドの A/B)。
+///
+/// ## 直していないこと
+///
+/// **M0.5 (神経核) にも `local_entropy` による周波数別の適応がある。**
+/// 入力層にも慣化を入れると**二重になる**。それが良いか悪いかは測ってから。
+static INPUT_HABITUATION: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
+
+/// 入力ニューロンの慣化が有効か。初回だけ環境変数を読む。**乱数は使わない。**
+pub fn input_habituation_enabled() -> bool {
+    use std::sync::atomic::Ordering;
+    let v = INPUT_HABITUATION.load(Ordering::Relaxed);
+    if v == 2 {
+        let on = std::env::var("DRPNN_INPUT_HABITUATION").map(|s| s == "1").unwrap_or(false);
+        INPUT_HABITUATION.store(on as u8, Ordering::Relaxed);
+        return on;
+    }
+    v == 1
+}
+
+/// 実行時に切り替える (対照実験用)。**false で従来と厳密に同一。**
+pub fn set_input_habituation(on: bool) {
+    INPUT_HABITUATION.store(on as u8, std::sync::atomic::Ordering::Relaxed);
+}
+
+
 /// 熱力学的ニューロン
 #[derive(Clone, Debug)]
 pub struct ThermoNeuron {
@@ -237,13 +284,21 @@ impl ThermoNeuron {
             enthalpy_max: 10,
             enthalpy_recovery_rate: 10,
             entropy_decay_rate: 1,
-            entropy_decay_interval: 1,
-            // 入力ニューロンは entropy_per_spike=0 (生成しない) ので比例項は効かない
+            // **F 案 (2026-08-27)**: **3 つ目のスイッチ。**
+            // 散逸は max(local_entropy >> 3, entropy_decay_rate) で、
+            // interval=1 だと床が 1/step。蓄積は 10 × 発火率 0.06 = 0.6/step なので
+            // **床の方が大きく、エントロピーは絶対に溜まらない。**
+            // 旧コメント「入力ニューロンは entropy_per_spike=0 なので比例項は効かない」が
+            // 示すとおり、interval=1 は**エントロピーが 0 である前提**でセットされていた。
+            // 慣化を有効にするなら皮質と同じ 50 にしないと効かない (**既存値。発明ではない**)。
+            entropy_decay_interval: if input_habituation_enabled() { 50 } else { 1 },
             entropy_decay_shift: 3,
             entropy_decay_counter: 0,
-            entropy_per_spike: 0,
+            // **F 案 (2026-08-27)**: 慣化は `entropy_per_spike` と `generates_entropy` の
+            // **両方**が生きていないと効かない。値は皮質の興奮性と同じ 10。
+            entropy_per_spike: if input_habituation_enabled() { 10 } else { 0 },
             is_inhibitory: false,
-            generates_entropy: false,
+            generates_entropy: input_habituation_enabled(),
             // 2026-08-26: 2 → **0** (受信専用トランスデューサ)。
             //
             // このフィールドは「検証中: 仮想 M0 等価性」のまま結論が出ずに放置され、
