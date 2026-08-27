@@ -18,7 +18,9 @@
 //! これらは CV でないので別の型にする。
 
 use super::phoneme_synth::{
-    synth_consonant_banded, synth_vowel_f0, synth_vowel_f0_full, vowels, Consonant, LfsrNoise, Vowel, SAMPLE_RATE_HZ,
+    band_filter, glottal_pulse_train, normalize_rms, synth_consonant_banded,
+    synth_vowel_f0, synth_vowel_f0_full, vowels, FormantResonator,
+    ANTIFORMANT_BW_HZ, CLOSURE_FRACTION_PERCENT, TRANSITION_MS, UTTERANCE_TARGET_RMS, Consonant, LfsrNoise, Vowel, SAMPLE_RATE_HZ,
 };
 
 /// 日本語のモーラ。
@@ -295,6 +297,10 @@ pub const CONSONANT_MS: f64 = 30.0;
 ///
 /// F0 は発話全体で一定 (抑揚は未実装・§14)。
 pub fn synth_utterance(moras: &[Mora], f0_hz: f64, noise: &mut LfsrNoise) -> Vec<i32> {
+    // **連続合成**(2026-08-27)。既定 OFF。DRPNN_CONTINUOUS=1 / set_continuous(true) で ON。
+    if continuous_enabled() {
+        return synth_utterance_continuous(moras, f0_hz, noise);
+    }
     let mut out: Vec<i32> = Vec::new();
     let mut last_vowel: Option<Vowel> = None;
     for m in moras {
@@ -424,4 +430,238 @@ mod tests {
         assert!(w.iter().all(|&v| v == 0), "促音が無音でない");
         assert_eq!(w.len(), (MORA_MS * SAMPLE_RATE_HZ / 1000.0) as usize);
     }
+}
+
+
+// ──────────────────────────────────────────────────────────────
+// 連続合成 (2026-08-27)
+// ──────────────────────────────────────────────────────────────
+
+/// 連続合成を使うか。**既定 ON** (2026-08-27・§14.41 の A/B のあと)。
+/// `DRPNN_CONTINUOUS=0` で旧経路 (断片連結)。
+static CONTINUOUS: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
+
+/// 有効か。初回だけ環境変数を読む。**乱数は使わない。**
+pub fn continuous_enabled() -> bool {
+    use std::sync::atomic::Ordering;
+    let v = CONTINUOUS.load(Ordering::Relaxed);
+    if v == 2 {
+        let on = std::env::var("DRPNN_CONTINUOUS").map(|s| s != "0").unwrap_or(true);
+        CONTINUOUS.store(on as u8, Ordering::Relaxed);
+        return on;
+    }
+    v == 1
+}
+
+/// 実行時に切り替える (対照実験用)。
+pub fn set_continuous(on: bool) {
+    CONTINUOUS.store(on as u8, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 摩擦枝に帯域通過した雑音を書き込む。**2ms の ramp はクリック防止の最小限。**
+fn write_fric(buf: &mut [i32], noise: &mut LfsrNoise, a: usize, b: usize, lo: f64, hi: f64) {
+    let b = b.min(buf.len());
+    if b <= a { return; }
+    let mut f = band_filter(lo, hi);
+    let len = b - a;
+    let ramp = ((2.0 * SAMPLE_RATE_HZ / 1000.0) as usize).min(len / 4).max(1);
+    for i in 0..len {
+        let x = f.process(noise.next_sample());
+        let env = if i < ramp { (i * 1024 / ramp) as i32 }
+                  else if i + ramp >= len { (((len - i) * 1024) / ramp) as i32 }
+                  else { 1024 };
+        buf[a + i] = buf[a + i].saturating_add(((x as i64 * env as i64) >> 10) as i32);
+    }
+}
+
+/// **発話全体を 1 本の連続した声帯源と、連続的に変化する声道で合成する。** (2026-08-27)
+///
+/// ## なぜ
+///
+/// §14.38 で出荷コードによって確定した:
+/// - **モーラ境界を音響が越えない** (連続合成と個別連結が**バイト同一**)
+/// - **子音-母音境界にちょうど −35 dB の谷**があり、2窓の境界と完全一致
+///
+/// ユーザーの指摘: 「**ストリームで考えているのだから、かなごとに区切って
+/// 非線形にしたら意味がない**」
+///
+/// **旧経路は「独立に合成した断片を、それぞれ ramp でゼロに落としてから連結」していた。**
+/// 実音声は連続発声であり、**声道は前のモーラの形から次の形へ連続的に動く**。
+///
+/// ## 構造 (Klatt 型の並列合成)
+///
+/// - 声帯源は発話全体で 1 本 (位相連続) → 声道 (3 共鳴器・毎サンプル補間) → 放射
+/// - 雑音 → 帯域通過 (破裂/摩擦の枝・声道を通さない) を足す
+/// - **声道の形はアンカーの間を線形補間する。** アンカーは
+///   (子音の解放時点 = locus) と (遷移の終わり = 母音の目標値)。
+///   **前のモーラの母音から次の子音の locus へも補間されるので、
+///   協調調音がモーラ境界を越える。** これが旧経路との決定的な違い。
+/// - **ramp は発話の先頭と末尾だけ。** モーラ境界にも子音-母音境界にも置かない。
+/// - **正規化は発話全体で 1 回。**
+/// - 無声破裂音の閉鎖が無音なのは**実音声でも正しい**のでそのまま残す。
+///
+/// ## 直していないこと
+///
+/// 摩擦の枝は声道を通さない (Klatt と同じ近似) / 先行母音長・閉鎖長の
+/// 有声-無声非対称はまだ無い / F4・F5 は無い。
+pub fn synth_utterance_continuous(moras: &[Mora], f0_hz: f64, noise: &mut LfsrNoise) -> Vec<i32> {
+    let spm = (MORA_MS * SAMPLE_RATE_HZ / 1000.0) as usize;
+    let cn_s = (CONSONANT_MS * SAMPLE_RATE_HZ / 1000.0) as usize;
+    let tr_s = (TRANSITION_MS * SAMPLE_RATE_HZ / 1000.0) as usize;
+    let n = moras.len() * spm;
+    if n == 0 { return Vec::new(); }
+    const BW: [f64; 3] = [60.0, 90.0, 150.0];
+
+    // ---- 1) 計画を立てる ----
+    let mut anchors: Vec<(usize, [f64; 3])> = Vec::new();
+    let mut vg = vec![0i32; n];        // 声帯源の利得 (0..4096)
+    let mut asp = vec![false; n];      // 声道を雑音で駆動する (気音)
+    let mut fric = vec![0i32; n];      // 摩擦枝
+    let mut az = vec![0f64; n];        // 反共鳴の周波数 (0 = なし)
+    let mut last_v: Option<Vowel> = None;
+
+    for (mi, m) in moras.iter().enumerate() {
+        let s = mi * spm;
+        match *m {
+            Mora::Cv { consonant, vowel, locus, vot_ms } => {
+                let vot_n = ((vot_ms * SAMPLE_RATE_HZ / 1000.0) as usize).min(spm - cn_s);
+                match consonant {
+                    Consonant::None => {
+                        anchors.push((s + tr_s, vowel.formants_hz));
+                        for i in s..(s + spm).min(n) { vg[i] = 4096; }
+                    }
+                    Consonant::Plosive { burst_freq_low, burst_freq_high, voiced } => {
+                        let cl = cn_s * CLOSURE_FRACTION_PERCENT / 100;
+                        for i in s..(s + cl).min(n) { vg[i] = if voiced { 1024 } else { 0 }; }
+                        write_fric(&mut fric, noise, s + cl, s + cn_s, burst_freq_low, burst_freq_high);
+                        if let Some(l) = locus { anchors.push((s + cn_s, l)); }
+                        anchors.push((s + cn_s + tr_s, vowel.formants_hz));
+                        for i in (s + cl)..(s + spm).min(n) { vg[i] = 4096; }
+                        for i in (s + cn_s)..(s + cn_s + vot_n).min(n) { asp[i] = true; }
+                    }
+                    Consonant::Fricative { freq_low, freq_high, voiced } => {
+                        write_fric(&mut fric, noise, s, s + cn_s, freq_low, freq_high);
+                        for i in s..(s + cn_s).min(n) { vg[i] = if voiced { 1024 } else { 0 }; }
+                        if let Some(l) = locus { anchors.push((s + cn_s, l)); }
+                        anchors.push((s + cn_s + tr_s, vowel.formants_hz));
+                        for i in (s + cn_s)..(s + spm).min(n) { vg[i] = 4096; }
+                        for i in (s + cn_s)..(s + cn_s + vot_n).min(n) { asp[i] = true; }
+                    }
+                    Consonant::Affricate { burst_freq_low, burst_freq_high,
+                                           fric_freq_low, fric_freq_high } => {
+                        let cl = cn_s * 2 / 5;
+                        for i in s..(s + cl).min(n) { vg[i] = 0; }
+                        write_fric(&mut fric, noise, s + cl, s + cl + cn_s / 5,
+                                   burst_freq_low, burst_freq_high);
+                        write_fric(&mut fric, noise, s + cl + cn_s / 5, s + cn_s,
+                                   fric_freq_low, fric_freq_high);
+                        if let Some(l) = locus { anchors.push((s + cn_s, l)); }
+                        anchors.push((s + cn_s + tr_s, vowel.formants_hz));
+                        for i in (s + cn_s)..(s + spm).min(n) { vg[i] = 4096; }
+                        for i in (s + cn_s)..(s + cn_s + vot_n).min(n) { asp[i] = true; }
+                    }
+                    Consonant::Nasal { f1, f2, zero_hz } => {
+                        anchors.push((s + cn_s / 2, [f1, f2, 2700.0]));
+                        anchors.push((s + cn_s + tr_s, vowel.formants_hz));
+                        for i in s..(s + spm).min(n) { vg[i] = 4096; }
+                        for i in s..(s + cn_s).min(n) { az[i] = zero_hz; }
+                    }
+                    Consonant::Approximant { f1, f2 } => {
+                        anchors.push((s + cn_s / 2, [f1, f2, 2700.0]));
+                        anchors.push((s + cn_s + tr_s, vowel.formants_hz));
+                        for i in s..(s + spm).min(n) { vg[i] = 4096; }
+                    }
+                }
+                anchors.push((s + spm, vowel.formants_hz));
+                last_v = Some(vowel);
+            }
+            Mora::Long => {
+                if let Some(v) = last_v {
+                    anchors.push((s + spm, v.formants_hz));
+                    for i in s..(s + spm).min(n) { vg[i] = 4096; }
+                }
+            }
+            Mora::Sokuon => { /* 無音。声道の形は保持 (アンカーを置かない) */ }
+            Mora::Moraic => {
+                anchors.push((s + cn_s, [250.0, 1700.0, 2700.0]));
+                anchors.push((s + spm, [250.0, 1700.0, 2700.0]));
+                for i in s..(s + spm).min(n) { vg[i] = 4096; az[i] = 2800.0; }
+            }
+        }
+    }
+    if anchors.is_empty() { return vec![0i32; n]; }
+    anchors.sort_by_key(|&(t, _)| t);
+
+    // ---- 2) アンカーの間を線形補間して毎サンプルの声道の形を作る ----
+    let mut form = vec![[0f64; 3]; n];
+    let (mut k, mut prev_t, mut prev_f) = (0usize, 0usize, anchors[0].1);
+    for i in 0..n {
+        while k < anchors.len() && anchors[k].0 <= i {
+            prev_t = anchors[k].0;
+            prev_f = anchors[k].1;
+            k += 1;
+        }
+        form[i] = match anchors.get(k) {
+            Some(&(t, f)) if t > prev_t => {
+                let a = ((i.saturating_sub(prev_t)) as f64 / (t - prev_t) as f64).min(1.0);
+                [prev_f[0] + (f[0] - prev_f[0]) * a,
+                 prev_f[1] + (f[1] - prev_f[1]) * a,
+                 prev_f[2] + (f[2] - prev_f[2]) * a]
+            }
+            _ => prev_f,
+        };
+    }
+
+    // ---- 3) 走らせる ----
+    let pulse = glottal_pulse_train(f0_hz, n, 4096);
+    let mut rs: Vec<FormantResonator> = (0..3)
+        .map(|j| FormantResonator::new(form[0][j], BW[j], 4.0, SAMPLE_RATE_HZ))
+        .collect();
+    let (mut ax1, mut ax2) = (0i64, 0i64);
+    let mut a_cache: (f64, i64, i64, i64) = (0.0, 0, 0, 0);
+    let mut voiced = Vec::with_capacity(n);
+    for i in 0..n {
+        for (j, r) in rs.iter_mut().enumerate() {
+            r.retune(form[i][j], BW[j], 4.0, SAMPLE_RATE_HZ);
+        }
+        let src = if asp[i] { noise.next_sample() } else { pulse[i] };
+        let x = ((src as i64 * vg[i] as i64) >> 12) as i32;
+        let mut y = 0i32;
+        for r in rs.iter_mut() { y = y.saturating_add(r.process(x)); }
+        if az[i] > 0.0 {
+            if a_cache.0 != az[i] {
+                let r = (-std::f64::consts::PI * ANTIFORMANT_BW_HZ / SAMPLE_RATE_HZ).exp();
+                let th = 2.0 * std::f64::consts::PI * az[i] / SAMPLE_RATE_HZ;
+                let (b1, b2) = (-2.0 * r * th.cos(), r * r);
+                let dc = 1.0 + b1 + b2;
+                a_cache = (az[i], (b1 * 32768.0).round() as i64, (b2 * 32768.0).round() as i64,
+                           if dc.abs() < 1e-6 { 32768 } else { (32768.0 / dc).round() as i64 });
+            }
+            let acc = (y as i64) * 32768 + a_cache.1 * ax1 + a_cache.2 * ax2;
+            ax2 = ax1;
+            ax1 = y as i64;
+            y = ((acc.saturating_mul(a_cache.3)) >> 30) as i32;
+        } else {
+            ax2 = ax1;
+            ax1 = y as i64;
+        }
+        voiced.push(y.saturating_add(fric[i]));
+    }
+
+    // ---- 4) 唇からの放射 (一次差分) ----
+    let mut raw = Vec::with_capacity(n);
+    let mut prev = 0i32;
+    for &v in voiced.iter() { raw.push(v.saturating_sub(prev)); prev = v; }
+
+    // ---- 5) **ramp は発話の先頭と末尾だけ** ----
+    let ramp = ((5.0 * SAMPLE_RATE_HZ / 1000.0) as usize).min(n / 4).max(1);
+    for i in 0..n {
+        let env = if i < ramp { (i * 1024 / ramp) as i32 }
+                  else if i + ramp >= n { (((n - i) * 1024) / ramp) as i32 }
+                  else { 1024 };
+        raw[i] = ((raw[i] as i64 * env as i64) >> 10) as i32;
+    }
+
+    // ---- 6) **正規化は発話全体で 1 回** ----
+    normalize_rms(raw, UTTERANCE_TARGET_RMS)
 }

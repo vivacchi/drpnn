@@ -54,6 +54,9 @@ pub const F0_DEFAULT_HZ: f64 = 150.0;
 /// 日本語の前有声は生体で 20-70ms。
 pub const CLOSURE_FRACTION_PERCENT: usize = 67;
 
+/// 発話全体を揃える RMS。`synth_consonant_banded` 内の `TARGET_RMS` と同じ値。
+pub const UTTERANCE_TARGET_RMS: i32 = 11314;
+
 #[inline]
 pub fn sin_lookup(phase_q24: u32) -> i32 {
     let table = sin_table();
@@ -710,7 +713,7 @@ pub fn synth_vowel_f0_full(
 }
 
 /// 整数 RMS (決定論的)
-fn rms_i64(w: &[i32]) -> i64 {
+pub fn rms_i64(w: &[i32]) -> i64 {
     if w.is_empty() {
         return 0;
     }
@@ -1111,7 +1114,7 @@ pub fn synth_consonant_banded(c: Consonant, duration_ms: f64, f0_hz: f64, noise:
 }
 
 /// 帯域 [lo, hi] → 中心は幾何平均、Q = 中心 / 帯域幅（音響の慣例）。
-fn band_filter(lo: f64, hi: f64) -> super::cochlea::BandpassBiquad {
+pub fn band_filter(lo: f64, hi: f64) -> super::cochlea::BandpassBiquad {
     let fc = (lo * hi).sqrt();
     let bw = (hi - lo).max(1.0);
     super::cochlea::BandpassBiquad::new(fc, fc / bw, SAMPLE_RATE_HZ)
@@ -1162,7 +1165,7 @@ fn mix_voice_bar(base: Vec<i32>, f0_hz: f64) -> Vec<i32> {
     base.iter().zip(vb.iter()).map(|(&a, &b)| a.saturating_add(b)).collect()
 }
 
-fn normalize_rms(mut wave: Vec<i32>, target: i32) -> Vec<i32> {
+pub fn normalize_rms(mut wave: Vec<i32>, target: i32) -> Vec<i32> {
     if wave.is_empty() {
         return wave;
     }
