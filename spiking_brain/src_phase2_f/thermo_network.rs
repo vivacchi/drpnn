@@ -292,6 +292,11 @@ pub struct MacroObservables {
 }
 
 /// 熱力学的 SNN ネットワーク
+///
+/// `Clone` は 2026-08-27 に追加 (**振る舞いは一切変えない**)。
+/// コーパスを流している途中の網を**分岐させてテスト刺激を流す**ために要る。
+/// 本線を乱さずに「いま何モーラ聞いた網か」ごとの読み出しを測れる。
+#[derive(Clone)]
 pub struct ThermoNetwork {
     pub config: ThermoNetworkConfig,
     pub neurons: Vec<ThermoNeuron>,
