@@ -90,6 +90,23 @@ const N_VAR: usize = 4;
 /// 1 フレーム = 10ms = 20 step (DT_MS=0.5)
 const STEPS_PER_FRAME: usize = 20;
 
+/// **変種ごとに単語の並び順を変える** (2026-08-27 追加)。
+///
+/// これが無いと**平衡アームで単語 w が常に単語 w−1 の直後に来る**ので、
+/// 4 変種すべてで文脈が同じになり、**持ち越された適応状態が単語の同一性と相関する**。
+/// 「直前に何が来たか」が手がかりになってしまう (登録簿「測定条件が結論を作る」)。
+/// 冷開始アームは単語ごとにリセットするので影響を受けない = **対照になる。**
+fn order_for(v: usize) -> Vec<usize> {
+    let n = PAIRS.len() * 2;
+    let mut idx: Vec<usize> = (0..n).collect();
+    let mut s = 0xC0FF_EE00_1234_5678u64 ^ ((v as u64) << 32);
+    for i in (1..n).rev() {
+        s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        idx.swap(i, ((s >> 33) as usize) % (i + 1));
+    }
+    idx
+}
+
 fn utterance_seed(w: usize, v: usize) -> u16 {
     ((w as u16).wrapping_mul(131).wrapping_add(v as u16).wrapping_mul(4099)) | 1
 }
@@ -208,10 +225,10 @@ fn eval(warm: bool) -> Arm {
     let (mut co, mut cn) = (Cochlea::new(), CochlearNucleus::new());
     if warm {
         // ウォームアップ: 全単語を 1 周流してから測る
-        for v in 0..N_VAR { for w in 0..words().len() { let _ = frames(w, v, &mut co, &mut cn); } }
+        for v in 0..N_VAR { for &w in order_for(v).iter() { let _ = frames(w, v, &mut co, &mut cn); } }
     }
     for v in 0..N_VAR {
-        for w in 0..words().len() {
+        for &w in order_for(v).iter() {
             let (m0f, cnf) = if warm {
                 frames(w, v, &mut co, &mut cn)
             } else {
