@@ -45,7 +45,9 @@ pub const ENTHALPY_PER_SPIKE: i32 = 3;
 ///
 /// 値は皮質の興奮性ニューロンと同じ 10 を使う (**新しい値の発明ではなく、同じ機構の既存値**)。
 ///
-/// **既定 false (= 従来)。** `DRPNN_INPUT_HABITUATION=1` で有効 (同じビルドの A/B)。
+/// **既定 true (= F 案・2026-08-27 ユーザー承認で採用)。**
+/// LTD/LTP 比 3.61 → 1.37・伝達可 5.2 倍 (§14.47)。E と組で単語弁別が初めて帰無を超え、
+/// 3 シードで再現 (§14.48.7)。`DRPNN_INPUT_HABITUATION=0` で従来に戻せる。
 ///
 /// ## 直していないこと
 ///
@@ -58,7 +60,7 @@ pub fn input_habituation_enabled() -> bool {
     use std::sync::atomic::Ordering;
     let v = INPUT_HABITUATION.load(Ordering::Relaxed);
     if v == 2 {
-        let on = std::env::var("DRPNN_INPUT_HABITUATION").map(|s| s == "1").unwrap_or(false);
+        let on = std::env::var("DRPNN_INPUT_HABITUATION").map(|s| s != "0").unwrap_or(true);
         INPUT_HABITUATION.store(on as u8, Ordering::Relaxed);
         return on;
     }

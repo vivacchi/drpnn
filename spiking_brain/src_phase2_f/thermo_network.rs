@@ -18,10 +18,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// 軸索成長を試みる周期 (step 数)。指示書 §4 では 200。
 /// 皮質ニューロンに**定電流による自走**を許すか。
 ///
-/// **既定 true (= 従来)。E 案 (自走を消す) を試したが正味で悪化したため。** §14.46 を見よ。
-/// **自走は有害だが同時に支えでもあった**: 消すと皮質がほぼ黙り (0.0043 -> 0.0004)、
-/// post が発火しないので LTP が止まり、皮質内の伝達可が 2,682 -> 6 に壊滅した。
-/// `DRPNN_CORTEX_TONIC=0` で E 案を試せる。
+/// **既定 false (= E 案・2026-08-27 ユーザー承認で採用)。**
+///
+/// 経緯: E 単独では悪化した (§14.46: 自走を消すと皮質が黙り、LTP が止まって網が壊滅)。
+/// **だが F (入力ニューロンの慣化) の後では成立した** (§14.48: 駆動が 7.5 倍になったので
+/// 自走という松葉杖が要らなくなった)。E+F で単語弁別が初めて置換帰無を超え、
+/// **3 シード (302/777/12345) すべてで再現した** (§14.48.7)。従来 (tonic あり) は 0/5 だった。
+/// `DRPNN_CORTEX_TONIC=1` で従来に戻せる。**E+F は組でのみ有効** — E 単独に戻すな。
 ///
 /// ## 何が起きていたか
 ///
@@ -60,7 +63,7 @@ pub fn cortex_tonic_enabled() -> bool {
     use std::sync::atomic::Ordering;
     let v = CORTEX_TONIC.load(Ordering::Relaxed);
     if v == 2 {
-        let on = std::env::var("DRPNN_CORTEX_TONIC").map(|s| s != "0").unwrap_or(true);
+        let on = std::env::var("DRPNN_CORTEX_TONIC").map(|s| s == "1").unwrap_or(false);
         CORTEX_TONIC.store(on as u8, Ordering::Relaxed);
         return on;
     }
@@ -70,6 +73,49 @@ pub fn cortex_tonic_enabled() -> bool {
 /// 実行時に切り替える (対照実験用)。**true = 従来 = 既定。**
 pub fn set_cortex_tonic(on: bool) {
     CORTEX_TONIC.store(on as u8, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// **M1 の conductance 受動減衰の周期** [step]。(2026-08-27・D 案)
+///
+/// ## なぜ変えたか
+///
+/// 従来は 1,000 step (0.5 秒) ごとに −1。初期値 80 から信号が消える
+/// (`conductance < SIGNAL_SCALE_DIVISOR = 10`) まで **71 × 1,000 step = 296 モーラ = 35 秒**。
+///
+/// **実物の early-LTP の保持は 1〜3 時間** (Frey & Morris 1997 ほか) ≒ **30,000 モーラ**。
+/// **実装は実物より約 100 倍速く消えていた。**
+///
+/// §14.43〜§14.48 で実測した「聞かせるほど読み出しが痩せる」(全シードで 0 モーラが最良・
+/// 伝達可 22,740 → 1,346 と減り続ける) の数値的な原因がこれである。
+///
+/// 是正: 30,000 モーラ × 240 step ÷ 71 段 ≈ 101,000 → **100,000 step (= 従来の 100 倍)**。
+/// **パラメータの発明ではなく、文献の時間スケールへの是正である。**
+///
+/// `DRPNN_CONDUCTANCE_DECAY` で上書きできる (同じビルドの A/B)。**1000 で従来と厳密に同一。**
+/// **M2 の 1,000 は変えない** (別の設計判断)。
+/// 刈込の時計 (`vitality_decay_interval = 10,000`) も**変えない** — 構造の時計は別物である。
+pub const CONDUCTANCE_DECAY_M1_DEFAULT: i32 = 100_000;
+
+static CONDUCTANCE_DECAY_M1: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+
+/// M1 の conductance 減衰周期 [step]。初回だけ環境変数を読む。**乱数は使わない。**
+pub fn conductance_decay_m1() -> i32 {
+    use std::sync::atomic::Ordering;
+    let v = CONDUCTANCE_DECAY_M1.load(Ordering::Relaxed);
+    if v < 0 {
+        let w = std::env::var("DRPNN_CONDUCTANCE_DECAY").ok()
+            .and_then(|s| s.parse::<i32>().ok())
+            .unwrap_or(CONDUCTANCE_DECAY_M1_DEFAULT)
+            .max(1);
+        CONDUCTANCE_DECAY_M1.store(w, Ordering::Relaxed);
+        return w;
+    }
+    v
+}
+
+/// 実行時に切り替える (対照実験用)。**1000 で従来と厳密に同一。**
+pub fn set_conductance_decay_m1(w: i32) {
+    CONDUCTANCE_DECAY_M1.store(w.max(1), std::sync::atomic::Ordering::Relaxed);
 }
 
 /// **M1 の因果窓** [step]。(2026-08-27)
@@ -200,7 +246,7 @@ impl Default for ThermoNetworkConfig {
             io_layout: None, // デフォルト rigid (M1 互換)
             causal_window: causal_window_m1(),
             threshold_diversity_std: 0, // デフォルト OFF (全ニューロン同一閾値、 既存互換)
-            conductance_decay_interval: 1000,  // デフォルト 500ms (既存互換)
+            conductance_decay_interval: conductance_decay_m1(),
             vitality_decay_interval: 10000,    // デフォルト 5s (既存互換)
         }
     }
@@ -243,7 +289,7 @@ impl ThermoNetworkConfig {
             io_layout: Some(IoLayout { input_positions, output_positions }),
             causal_window: causal_window_m1(),
             threshold_diversity_std: 0,
-            conductance_decay_interval: 1000,
+            conductance_decay_interval: conductance_decay_m1(),
             vitality_decay_interval: 10000,
         }
     }
@@ -288,7 +334,7 @@ impl ThermoNetworkConfig {
             io_layout: Some(IoLayout { input_positions, output_positions }),
             causal_window: causal_window_m1(),
             threshold_diversity_std: 0,
-            conductance_decay_interval: 1000,
+            conductance_decay_interval: conductance_decay_m1(),
             vitality_decay_interval: 10000,
         }
     }
@@ -328,7 +374,7 @@ impl ThermoNetworkConfig {
             io_layout: Some(IoLayout { input_positions, output_positions }),
             causal_window: causal_window_m1(),
             threshold_diversity_std: 0,
-            conductance_decay_interval: 1000,
+            conductance_decay_interval: conductance_decay_m1(),
             vitality_decay_interval: 10000,
         }
     }
