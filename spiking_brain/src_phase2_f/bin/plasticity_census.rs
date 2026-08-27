@@ -144,6 +144,7 @@ fn main() {
 
     let cps = [0usize, 100, 300, 1000, n_moras];
     let mut next = 0usize;
+    let (mut fire_in, mut fire_cx, mut n_steps) = (0u64, 0u64, 0u64);
     println!();
     println!("  {:<14} {:>8} {:>12} {:>12} {:>12} {:>10} {:>8} {:>10}",
              "", "本数", "LTP事象", "LTD事象", "一度でもLTP", "**80超**", "最大G", "伝達可");
@@ -160,7 +161,11 @@ fn main() {
             if chunk.len() < SAMPLES_PER_STEP { break; }
             let m0 = co.process_step(chunk);
             let cno = cn.process_step(&m0);
-            let _ = net.step(&cno);
+            // **発火率を数える** (§14.44.4 の推論を確かめる。振る舞いは変えない)
+            for nid in net.step(&cno) {
+                if net.input_neurons.contains(&nid) { fire_in += 1u64; } else { fire_cx += 1u64; }
+            }
+            n_steps += 1u64;
         }
     }
 
@@ -179,6 +184,15 @@ fn main() {
              INITIAL_CONDUCTANCE, inp.4, oth.4,
              if inp.4 + oth.4 == 0 { "**ゼロ。LTP は一度も減衰に勝っていない**" } else { "**存在する**" });
     println!("  G97d LTP と LTD の比 -> 入力→皮質 {}:{} / それ以外 {}:{}", inp.1, inp.2, oth.1, oth.2);
+    let n_in = net.input_neurons.len() as f64;
+    let n_cx = (net.n_neurons() - net.input_neurons.len()) as f64;
+    let st = n_steps.max(1) as f64;
+    println!();
+    println!("  **G97e 発火率 (§14.44.4 の推論の検証)** — 1 ニューロンあたり 1 step の発火確率");
+    println!("     **入力ニューロン ({:.0} 個): {:.4}**", n_in, fire_in as f64 / st / n_in);
+    println!("     皮質ニューロン ({:.0} 個): {:.4}", n_cx, fire_cx as f64 / st / n_cx);
+    println!("     -> **比 {:.2} 倍**  {}", (fire_in as f64 / n_in) / (fire_cx as f64 / n_cx).max(1e-9),
+             if fire_in as f64 / n_in > fire_cx as f64 / n_cx { "**入力側が高頻度 = 推論どおり**" } else { "**推論が外れた**" });
     println!("  G97f コーパスの内容 -> **一切出力していない (数値のみ)**");
     println!();
     println!("  【この測定が答えないこと】**なぜ因果ペアが成立しないのか**までは見ていない");
