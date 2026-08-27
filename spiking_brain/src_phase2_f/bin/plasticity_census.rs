@@ -46,8 +46,8 @@
 
 use spiking_brain::phase2_f::cochlea::{Cochlea, SAMPLES_PER_STEP};
 use spiking_brain::phase2_f::cochlear_nucleus::{CochlearNucleus, N_CN_OUTPUT};
-use spiking_brain::phase2_f::kana::{moras_from_kana, synth_utterance, Mora};
-use spiking_brain::phase2_f::phoneme_synth::LfsrNoise;
+use spiking_brain::phase2_f::kana::{moras_from_kana, synth_utterance, Mora, MORA_MS};
+use spiking_brain::phase2_f::phoneme_synth::{LfsrNoise, SAMPLE_RATE_HZ};
 use spiking_brain::phase2_f::thermo_network::{ThermoNetwork, ThermoNetworkConfig, SIGNAL_SCALE_DIVISOR};
 use spiking_brain::phase2_f::thermo_synapse::{LTD_AMOUNT, LTP_AMOUNT, OPEN_THRESHOLD};
 use std::io::Read;
@@ -151,6 +151,8 @@ fn main() {
 
     let cps = [0usize, 100, 300, 1000, n_moras];
     let mut next = 0usize;
+    let silent = std::env::var("DRPNN_SILENCE").map(|v| v == "1").unwrap_or(false);
+    if silent { println!("  **【無音アーム】波形をゼロにして流す。**"); }
     let (mut fire_in, mut fire_cx, mut n_steps) = (0u64, 0u64, 0u64);
     println!();
     println!("  {:<14} {:>8} {:>12} {:>12} {:>12} {:>8} {:>7} {:>9} {:>9}",
@@ -163,7 +165,14 @@ fn main() {
             next += 1;
         }
         if i == moras.len() { break; }
-        let w = synth_utterance(std::slice::from_ref(&moras[i]), F0S[i % 4], &mut noise);
+        // **無音アーム** (DRPNN_SILENCE=1): 波形をゼロに差し替える。
+        // コードのコメントが「無音でも84個中43個が最大135Hzで自走している(実測)」と書いており、
+        // 実測した入力ニューロンの発火率 121Hz がそれに近い。**入力が音を運んでいるかを決める。**
+        let w = if silent {
+            vec![0i32; (MORA_MS * SAMPLE_RATE_HZ / 1000.0) as usize]
+        } else {
+            synth_utterance(std::slice::from_ref(&moras[i]), F0S[i % 4], &mut noise)
+        };
         for chunk in w.chunks(SAMPLES_PER_STEP) {
             if chunk.len() < SAMPLES_PER_STEP { break; }
             let m0 = co.process_step(chunk);
