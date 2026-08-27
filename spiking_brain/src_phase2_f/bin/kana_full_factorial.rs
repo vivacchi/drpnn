@@ -97,8 +97,12 @@ const F0S: [f64; 4] = [100.0, 130.0, 160.0, 200.0];
 const N_VAR: usize = 4;
 const WARMUP: usize = 3;
 const STEPS_PER_MORA: usize = (MORA_MS as usize) * 16 / SAMPLES_PER_STEP;
-/// 子音区間の終わり (CONSONANT_MS=30ms ÷ 0.5ms)
-const CONSONANT_STEPS: usize = 60;
+/// 子音区間の終わり (CONSONANT_MS=30ms ÷ 0.5ms)。
+/// **DRPNN_WINDOW_STEPS で動かせる** — §14.38 で「2窓の利得は合成器の谷を見ているだけか」を
+/// 切り分けるために追加。谷由来なら 60 で鋭いピークになるはず。
+fn consonant_steps() -> usize {
+    std::env::var("DRPNN_WINDOW_STEPS").ok().and_then(|v| v.parse().ok()).unwrap_or(60)
+}
 
 fn utterance_seed(k: usize, v: usize) -> u16 {
     ((k as u16).wrapping_mul(97).wrapping_add(v as u16).wrapping_mul(2851)) | 1
@@ -141,7 +145,7 @@ fn build(ctx: Ctx, windowed: bool) -> Vec<(usize, Vec<f64>)> {
                 for (step, chunk) in w.chunks(SAMPLES_PER_STEP).enumerate() {
                     if chunk.len() < SAMPLES_PER_STEP { break; }
                     let m0 = co.process_step(chunk);
-                    let win = if windowed && step >= CONSONANT_STEPS { 1 } else { 0 };
+                    let win = if windowed && step >= consonant_steps() { 1 } else { 0 };
                     for (i, &x) in cn.process_step(&m0).iter().enumerate() {
                         if x != 0 { c[win * N_CN_OUTPUT + i] += 1.0; }
                     }
@@ -170,7 +174,7 @@ fn build(ctx: Ctx, windowed: bool) -> Vec<(usize, Vec<f64>)> {
                 let mi = step / STEPS_PER_MORA;
                 if mi >= ord.len() { continue; }
                 let inner = step % STEPS_PER_MORA;
-                let win = if windowed && inner >= CONSONANT_STEPS { 1 } else { 0 };
+                let win = if windowed && inner >= consonant_steps() { 1 } else { 0 };
                 for (i, &x) in cn.process_step(&m0).iter().enumerate() {
                     if x != 0 { c[mi][win * N_CN_OUTPUT + i] += 1.0; }
                 }

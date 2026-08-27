@@ -339,3 +339,7 @@ path = "src_phase2_f/bin/audit_verify.rs"
 [[bin]]
 name = "sonorant_check"
 path = "src_phase2_f/bin/sonorant_check.rs"
+
+[[bin]]
+name = "boundary_check"
+path = "src_phase2_f/bin/boundary_check.rs"
