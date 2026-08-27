@@ -262,7 +262,7 @@ fn measure_cheap(freqs: &[f64], q: f64, thr: i32) -> R {
             | Consonant::Fricative { freq_low: lo, freq_high: hi, .. } => {
                 (0..n).filter(|&i| freqs[i] >= lo && freqs[i] <= hi).collect()
             }
-            Consonant::Nasal { f1, f2 } => {
+            Consonant::Nasal { f1, f2, .. } => {
                 let mut v = vec![nearest_band(freqs, f1), nearest_band(freqs, f2)];
                 v.sort_unstable();
                 v.dedup();

@@ -71,7 +71,7 @@ fn consonants() -> Vec<(&'static str, Consonant)> {
         ("tu", Consonant::Plosive { burst_freq_low: 1500.0, burst_freq_high: 3500.0, voiced: false }),
         ("ki", Consonant::Plosive { burst_freq_low: 2000.0, burst_freq_high: 4000.0, voiced: false }),
         ("se", Consonant::Fricative { freq_low: 3000.0, freq_high: 8000.0, voiced: false }),
-        ("mo", Consonant::Nasal { f1: 250.0, f2: 1500.0 }),
+        ("mo", Consonant::Nasal { f1: 250.0, f2: 1500.0, zero_hz: 1000.0 }),
     ]
 }
 

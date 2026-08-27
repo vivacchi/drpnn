@@ -443,6 +443,54 @@ pub fn set_voiced_sonorant(on: bool) {
     VOICED_SONORANT.store(on as u8, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// 鼻音の反共鳴を入れるか。**同じビルドの対照のため。** 既定 ON・`DRPNN_NASAL_ZERO=0` で OFF。
+static NASAL_ZERO: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
+
+/// 有効か。初回だけ環境変数を読む。**乱数は使わない。**
+pub fn nasal_zero_enabled() -> bool {
+    use std::sync::atomic::Ordering;
+    let v = NASAL_ZERO.load(Ordering::Relaxed);
+    if v == 2 {
+        let on = std::env::var("DRPNN_NASAL_ZERO").map(|s| s != "0").unwrap_or(true);
+        NASAL_ZERO.store(on as u8, Ordering::Relaxed);
+        return on;
+    }
+    v == 1
+}
+
+/// 実行時に切り替える (対照実験用)。
+pub fn set_nasal_zero(on: bool) {
+    NASAL_ZERO.store(on as u8, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 反共鳴 (antiformant) の帯域幅 [Hz]。共鳴器の F2 と同じ Klatt の桁に合わせる。
+pub const ANTIFORMANT_BW_HZ: f64 = 200.0;
+
+/// **反共鳴を掛ける** (2026-08-27)。2 次 FIR の零点。
+///
+/// `y[n] = g · (x[n] + b1·x[n-1] + b2·x[n-2])`,
+/// `b1 = -2r cosθ`, `b2 = r²`, `r = exp(-π·bw/fs)`, `θ = 2π·f/fs`。
+/// `g` は **DC 利得が 1** になるよう正規化する (総量を変えないため)。
+/// 係数の算出だけ f64 (原理 3 の明文化された例外)、処理は整数。
+fn apply_antiformant(v: &[i32], zero_hz: f64) -> Vec<i32> {
+    let r = (-std::f64::consts::PI * ANTIFORMANT_BW_HZ / SAMPLE_RATE_HZ).exp();
+    let th = 2.0 * std::f64::consts::PI * zero_hz / SAMPLE_RATE_HZ;
+    let (b1, b2) = (-2.0 * r * th.cos(), r * r);
+    let dc = 1.0 + b1 + b2;
+    if dc.abs() < 1e-6 { return v.to_vec(); }
+    let (b1q, b2q, gq) = ((b1 * 32768.0).round() as i64,
+                          (b2 * 32768.0).round() as i64,
+                          (32768.0 / dc).round() as i64);
+    let (mut x1, mut x2) = (0i64, 0i64);
+    let mut out = Vec::with_capacity(v.len());
+    for &x in v.iter() {
+        let acc = (x as i64) * 32768 + b1q * x1 + b2q * x2;
+        x2 = x1; x1 = x as i64;
+        out.push(((acc.saturating_mul(gq)) >> 30) as i32);
+    }
+    out
+}
+
 /// **鼻音・接近音を声帯源で駆動する** (2026-08-27)。
 ///
 /// ## 何が壊れていたか
@@ -465,7 +513,7 @@ pub fn set_voiced_sonorant(on: bool) {
 /// **反共鳴 (antiformant) は入れていない。** 鼻音の本質的な音響特徴だが、
 /// **それは別の欠陥であり、ここでは源だけを直す。**
 /// 接近音を鼻音と同じ 2 フォルマントで近似している点も旧経路のまま。
-fn synth_sonorant_voiced(f1: f64, f2: f64, duration_ms: f64, f0_hz: f64) -> Vec<i32> {
+fn synth_sonorant_voiced(f1: f64, f2: f64, zero_hz: f64, duration_ms: f64, f0_hz: f64) -> Vec<i32> {
     let n_samples = (duration_ms * SAMPLE_RATE_HZ / 1000.0) as usize;
     let source = glottal_pulse_train(f0_hz, n_samples, 4096);
     let specs = [(f1, 60.0, 6000.0), (f2, 90.0, 3000.0)];
@@ -478,6 +526,10 @@ fn synth_sonorant_voiced(f1: f64, f2: f64, duration_ms: f64, f0_hz: f64) -> Vec<
         for r in rs.iter_mut() { s = s.saturating_add(r.process(x)); }
         voiced.push(s);
     }
+    // **反共鳴 (antiformant)**: 鼻音の調音位置を運ぶ。声道の伝達関数の一部なので共鳴器と同じ段。
+    let voiced = if zero_hz > 0.0 && nasal_zero_enabled() {
+        apply_antiformant(&voiced, zero_hz)
+    } else { voiced };
     // 唇からの放射 (一次差分・+6 dB/oct)。母音と同じ。
     let mut raw = Vec::with_capacity(n_samples);
     let mut prev = 0i32;
@@ -719,7 +771,12 @@ pub enum Consonant {
     /// `voiced` (2026-08-27 追加): 有声摩擦音では摩擦と**同時に**声帯が振動する。
     Fricative { freq_low: f64, freq_high: f64, voiced: bool },
     /// 鼻音 (例 /n/, /m/): 低周波フォルマント
-    Nasal { f1: f64, f2: f64 },
+    /// 鼻音。`zero_hz` = **反共鳴 (antiformant)** の周波数 [Hz]。0.0 で反共鳴なし。
+    ///
+    /// **鼻音の調音位置を運ぶのは反共鳴である** (Fujimura 1962)。
+    /// 低い鼻音フォルマント (250Hz 付近) は全鼻音に共通で「鼻音性」を運び、
+    /// **口腔の閉鎖より奥の長さが決める零点が「どこで閉じたか」を運ぶ。**
+    Nasal { f1: f64, f2: f64, zero_hz: f64 },
     /// 子音なし (「あいうえお」など母音のみのかな)
     None,
     /// **接近音** /j/ /w/ (2026-08-26 追加)。
@@ -779,7 +836,7 @@ pub fn synth_consonant(c: Consonant, duration_ms: f64, noise: &mut LfsrNoise) ->
                 out.push((n * env) >> 10);
             }
         }
-        Consonant::Nasal { f1, f2 } => {
+        Consonant::Nasal { f1, f2, .. } => {
             // 低周波 2 フォルマント
             //
             // 振幅校正 (2026-05-30 修正):
@@ -810,7 +867,7 @@ pub fn synth_consonant(c: Consonant, duration_ms: f64, noise: &mut LfsrNoise) ->
         // 2026-08-26 追加。旧実装は帯域指定を無視する設計なので、
         // 接近音は鼻音相当・破擦音は破裂音相当で近似する (旧経路の連続性のため)。
         Consonant::Approximant { f1, f2 } => {
-            return synth_consonant(Consonant::Nasal { f1, f2 }, duration_ms, noise);
+            return synth_consonant(Consonant::Nasal { f1, f2, zero_hz: 0.0 }, duration_ms, noise);
         }
         Consonant::Affricate { burst_freq_low, burst_freq_high, .. } => {
             return synth_consonant(
@@ -862,7 +919,7 @@ pub fn standard_syllables() -> [Syllable; 5] {
         },
         Syllable {
             label: "mo",
-            consonant: Consonant::Nasal { f1: 250.0, f2: 1500.0 },
+            consonant: Consonant::Nasal { f1: 250.0, f2: 1500.0, zero_hz: 1000.0 },
             vowel: v[4], // o
         },
     ]
@@ -964,10 +1021,10 @@ pub fn synth_consonant_banded(c: Consonant, duration_ms: f64, f0_hz: f64, noise:
         // 接近音: その位置の短い有声区間 (鼻音と同じ 2 フォルマント合成) で近似
         Consonant::Approximant { f1, f2 } => {
             if voiced_sonorant_enabled() {
-                normalize_rms(synth_sonorant_voiced(f1, f2, duration_ms, f0_hz), TARGET_RMS)
+                normalize_rms(synth_sonorant_voiced(f1, f2, 0.0, duration_ms, f0_hz), TARGET_RMS)
             } else {
                 normalize_rms(
-                    synth_consonant(Consonant::Nasal { f1, f2 }, duration_ms, noise),
+                    synth_consonant(Consonant::Nasal { f1, f2, zero_hz: 0.0 }, duration_ms, noise),
                     TARGET_RMS,
                 )
             }
@@ -1000,9 +1057,9 @@ pub fn synth_consonant_banded(c: Consonant, duration_ms: f64, f0_hz: f64, noise:
         // 初版は素通ししており、mo だけ RMS 4189 と他子音 5657 より 26% 小さかった。
         // これは「全子音を同一 RMS に揃える」という本関数自身の宣言に反する実装バグ
         // (独立レビューで発覚)。既存 `synth_consonant` 側の 2026-05-30 校正は変えない。
-        Consonant::Nasal { f1, f2 } => {
+        Consonant::Nasal { f1, f2, zero_hz } => {
             if voiced_sonorant_enabled() {
-                normalize_rms(synth_sonorant_voiced(f1, f2, duration_ms, f0_hz), TARGET_RMS)
+                normalize_rms(synth_sonorant_voiced(f1, f2, zero_hz, duration_ms, f0_hz), TARGET_RMS)
             } else {
                 normalize_rms(synth_consonant(c, duration_ms, noise), TARGET_RMS)
             }
@@ -1202,7 +1259,7 @@ mod tests {
     #[test]
     fn banded_nasal_shares_rms_with_others() {
         let nasal = synth_consonant_banded(
-            Consonant::Nasal { f1: 250.0, f2: 1500.0 }, 30.0, F0_DEFAULT_HZ, &mut LfsrNoise::new(0xACE1));
+            Consonant::Nasal { f1: 250.0, f2: 1500.0, zero_hz: 1000.0 }, 30.0, F0_DEFAULT_HZ, &mut LfsrNoise::new(0xACE1));
         let plos = synth_consonant_banded(plosive(500.0, 2000.0), 30.0, F0_DEFAULT_HZ, &mut LfsrNoise::new(0xACE1));
         let (rn, rp) = (wave_rms(&nasal), wave_rms(&plos));
         assert!((rn - rp).abs() / rp < 0.20,

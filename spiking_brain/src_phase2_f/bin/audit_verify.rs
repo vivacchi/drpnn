@@ -201,7 +201,7 @@ fn main() {
     println!("--- V5 鼻音・接近音は声帯源を通らないか (純音2本) [fatal] ---");
     println!("  監査の予測: f0_hz がこの経路で使われないので **な の子音区間が F0 を変えてもバイト同一**");
     println!();
-    for (nm, c) in [("鼻音 n", Consonant::Nasal { f1: 250.0, f2: 1700.0 }),
+    for (nm, c) in [("鼻音 n", Consonant::Nasal { f1: 250.0, f2: 1700.0, zero_hz: 1800.0 }),
                     ("接近 y", Consonant::Approximant { f1: 300.0, f2: 2200.0 }),
                     ("破裂 k", Consonant::Plosive { burst_freq_low: 2000.0, burst_freq_high: 4000.0, voiced: false })].iter() {
         let mut n1 = LfsrNoise::new(SEED);

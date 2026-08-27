@@ -181,8 +181,8 @@ fn consonant_of(row: char) -> Consonant {
             fric_freq_high: 6000.0,    // /sh/ と同じ摩擦 (ち)
         },
         'h' => Consonant::Fricative { freq_low: 500.0, freq_high: 4000.0, voiced: false }, // は行は無声
-        'm' => Consonant::Nasal { f1: 250.0, f2: 1500.0 },
-        'n' => Consonant::Nasal { f1: 250.0, f2: 1700.0 },
+        'm' => Consonant::Nasal { f1: 250.0, f2: 1500.0, zero_hz: 1000.0 },  // 両唇
+        'n' => Consonant::Nasal { f1: 250.0, f2: 1700.0, zero_hz: 1800.0 },  // 歯茎
         // ラ行 (弾き音) は破裂音で近似する。**正確でない**ことを明記 (§14)。
         // 2026-08-27: ら行 /ɾ/ は**有声**の弾き音。破裂音で近似しているが声帯は振動する。
         // これで た(無声) と ら(有声) に手がかりが増える
@@ -330,7 +330,8 @@ pub fn synth_utterance(moras: &[Mora], f0_hz: f64, noise: &mut LfsrNoise) -> Vec
             }
             Mora::Moraic => {
                 out.extend(synth_consonant_banded(
-                    Consonant::Nasal { f1: 250.0, f2: 1700.0 },
+                    // 撥音 ん は口蓋垂音 [ɴ]。**極は な と同じでも零点が位置を運ぶ** (Fujimura 1962)。
+                    Consonant::Nasal { f1: 250.0, f2: 1700.0, zero_hz: 2800.0 },
                     MORA_MS,
                     f0_hz,
                     noise,

@@ -111,7 +111,7 @@ fn target_bands(c: Consonant, freqs: &[f64]) -> (Vec<usize>, f64) {
             let unrepresentable = ((hi - F_MAX_HZ).max(0.0) + (F_MIN_HZ - lo).max(0.0)) / (hi - lo);
             (inside, unrepresentable)
         }
-        Consonant::Nasal { f1, f2 } => {
+        Consonant::Nasal { f1, f2, .. } => {
             let mut v = vec![nearest_band(freqs, f1), nearest_band(freqs, f2)];
             v.sort_unstable();
             v.dedup();
@@ -158,7 +158,7 @@ fn main() {
             | Consonant::Fricative { freq_low: lo, freq_high: hi, .. } => {
                 format!("{:.0}-{:.0}Hz", lo, hi)
             }
-            Consonant::Nasal { f1, f2 } => format!("f1={:.0} f2={:.0}Hz", f1, f2),
+            Consonant::Nasal { f1, f2, .. } => format!("f1={:.0} f2={:.0}Hz", f1, f2),
             Consonant::None => "なし".to_string(),
             Consonant::Approximant { f1, f2 } => format!("接近音 f1={:.0} f2={:.0}Hz", f1, f2),
             Consonant::Affricate { burst_freq_low, burst_freq_high, fric_freq_low, fric_freq_high } => {
