@@ -722,6 +722,27 @@ fn rms_i64(w: &[i32]) -> i64 {
 // LFSR ノイズ (決定論的)
 // ──────────────────────────────────────────────────────────────
 
+/// LFSR を白色雑音として使うか。**同じビルドの対照のため。**
+/// 既定 ON・`DRPNN_WHITE_NOISE=0` で旧実装 (16bit 状態を丸ごと返す = +6dB/oct 傾斜)。
+static WHITE_NOISE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
+
+/// 有効か。初回だけ環境変数を読む。**乱数は使わない。**
+pub fn white_noise_enabled() -> bool {
+    use std::sync::atomic::Ordering;
+    let v = WHITE_NOISE.load(Ordering::Relaxed);
+    if v == 2 {
+        let on = std::env::var("DRPNN_WHITE_NOISE").map(|s| s != "0").unwrap_or(true);
+        WHITE_NOISE.store(on as u8, Ordering::Relaxed);
+        return on;
+    }
+    v == 1
+}
+
+/// 実行時に切り替える (対照実験用)。
+pub fn set_white_noise(on: bool) {
+    WHITE_NOISE.store(on as u8, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// 16-bit LFSR ノイズ生成器. 周期 65535.
 #[derive(Clone, Debug)]
 pub struct LfsrNoise {
@@ -735,7 +756,24 @@ impl LfsrNoise {
         Self { state: s }
     }
 
-    /// 1 サンプルのノイズを生成. 戻り値: -SIN_AMPLITUDE..+SIN_AMPLITUDE 程度
+    /// 1 サンプルのノイズを生成。戻り値は ±`SIN_AMPLITUDE`。
+    ///
+    /// ## 2026-08-27 の訂正 — 旧実装は白色雑音ではなかった
+    ///
+    /// 旧実装は `(self.state as i16) as i32` で **16 ビット状態を丸ごと返していた。**
+    /// 隣り合うサンプルは **15 ビットを共有する** (1 ビット右シフトしただけ) ので、
+    /// 出力は `v[n] ≈ v[n-1]/2 - 32768·bit[n]` = **極 0.5 の 1 極 IIR に差分を掛けたもの**
+    /// であり、**白色ではなく +6 dB/oct の傾斜を持つ。**
+    ///
+    /// 帰結: RBJ バンドパスの上側スカートは −6 dB/oct しかないので、
+    /// 源の +6 dB/oct と打ち消し合って**通過帯域より上が平坦になり、宣言した帯域が効かない。**
+    /// 破裂音・摩擦音の調音位置の手がかりが圧縮されていた。
+    ///
+    /// 訂正: **新しく生成したビットだけを ±振幅で返す。**
+    /// タップ (0,2,3,5) は 16 ビットの最長周期多項式 (x¹⁶+x¹⁴+x¹³+x¹¹+1) なので、
+    /// ビット列は周期 65535 の m 系列 = **スペクトルはほぼ平坦。**
+    ///
+    /// `DRPNN_WHITE_NOISE=0` で旧実装に戻せる (同じビルドの対照)。
     #[inline]
     pub fn next_sample(&mut self) -> i32 {
         let bit = ((self.state >> 0)
@@ -743,8 +781,12 @@ impl LfsrNoise {
             ^ (self.state >> 3)
             ^ (self.state >> 5)) & 1;
         self.state = (self.state >> 1) | (bit << 15);
-        // i16 範囲のノイズに変換
-        (self.state as i16) as i32
+        if white_noise_enabled() {
+            if bit == 1 { SIN_AMPLITUDE } else { -SIN_AMPLITUDE }
+        } else {
+            // 旧実装 (白色でない)。対照のために残す。
+            (self.state as i16) as i32
+        }
     }
 }
 
