@@ -422,6 +422,78 @@ pub fn synth_vowel_f0_glide(
 /// 合わせないと「気音の区間だけ音量が違う」ことになり、
 /// **有声性を音量で当てられてしまう** (§14.27 の G87c で学んだ交絡)。
 /// 手がかりを**周期性の有無**だけに絞るための措置である。
+/// 有声共鳴音 (鼻音・接近音) を声帯源で駆動するか。**同じビルドの対照のため。**
+/// 既定 ON。`DRPNN_VOICED_SONORANT=0` で旧経路 (純音 2 本)。
+static VOICED_SONORANT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
+
+/// 有効か。初回だけ環境変数を読む。**乱数は使わない。**
+pub fn voiced_sonorant_enabled() -> bool {
+    use std::sync::atomic::Ordering;
+    let v = VOICED_SONORANT.load(Ordering::Relaxed);
+    if v == 2 {
+        let on = std::env::var("DRPNN_VOICED_SONORANT").map(|s| s != "0").unwrap_or(true);
+        VOICED_SONORANT.store(on as u8, Ordering::Relaxed);
+        return on;
+    }
+    v == 1
+}
+
+/// 実行時に切り替える (対照実験用)。
+pub fn set_voiced_sonorant(on: bool) {
+    VOICED_SONORANT.store(on as u8, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// **鼻音・接近音を声帯源で駆動する** (2026-08-27)。
+///
+/// ## 何が壊れていたか
+///
+/// 旧経路 (`synth_consonant` の `Nasal` 腕) は `sin_lookup` の**純音 2 本**を足すだけで、
+/// **声帯パルス列を通らず、`f0_hz` を一切使っていなかった。**
+/// 出荷コードで確認 (§14.32): 鼻音・接近音の子音区間は **F0 を変えてもバイト同一**。
+///
+/// **鼻音も接近音も有声音である。** 声帯源の倍音を持たなければならない。
+/// 該当するのは な行 5・ま行 5・や行 3・わ行 2・撥音 ん 1 = **69 かな中 16 個。**
+///
+/// ## 何を直したか
+///
+/// 母音と同じ 3 段 (声帯源 → 共鳴器 → 唇からの放射) に通す。
+/// **帯域幅は `vowels()` と同じ Klatt 1980 の [60, 90] を使う** (新しい値を発明しない)。
+/// 振幅比 [6000, 3000] は旧経路のものをそのまま引き継ぐ (総量は `normalize_rms` が揃える)。
+///
+/// ## 直していないこと
+///
+/// **反共鳴 (antiformant) は入れていない。** 鼻音の本質的な音響特徴だが、
+/// **それは別の欠陥であり、ここでは源だけを直す。**
+/// 接近音を鼻音と同じ 2 フォルマントで近似している点も旧経路のまま。
+fn synth_sonorant_voiced(f1: f64, f2: f64, duration_ms: f64, f0_hz: f64) -> Vec<i32> {
+    let n_samples = (duration_ms * SAMPLE_RATE_HZ / 1000.0) as usize;
+    let source = glottal_pulse_train(f0_hz, n_samples, 4096);
+    let specs = [(f1, 60.0, 6000.0), (f2, 90.0, 3000.0)];
+    let mut rs: Vec<FormantResonator> = specs.iter()
+        .map(|&(f, bw, amp)| FormantResonator::new(f, bw, amp / 4096.0, SAMPLE_RATE_HZ))
+        .collect();
+    let mut voiced = Vec::with_capacity(n_samples);
+    for &x in source.iter() {
+        let mut s = 0i32;
+        for r in rs.iter_mut() { s = s.saturating_add(r.process(x)); }
+        voiced.push(s);
+    }
+    // 唇からの放射 (一次差分・+6 dB/oct)。母音と同じ。
+    let mut raw = Vec::with_capacity(n_samples);
+    let mut prev = 0i32;
+    for &v in voiced.iter() { raw.push(v.saturating_sub(prev)); prev = v; }
+    // attack/release は旧経路と同じ 5ms
+    let ramp = ((5.0 * SAMPLE_RATE_HZ / 1000.0) as usize).min(n_samples / 4).max(1);
+    let mut out = Vec::with_capacity(n_samples);
+    for (i, &sm) in raw.iter().enumerate() {
+        let env = if i < ramp { (i * 1024 / ramp) as i32 }
+                  else if i + ramp >= n_samples { (((n_samples - i) * 1024) / ramp) as i32 }
+                  else { 1024 };
+        out.push(((sm as i64 * env as i64) >> 10) as i32);
+    }
+    out
+}
+
 /// **唇からの放射 (一次差分) を掛けた後の** RMS を、先頭 `n` サンプルについて測る。
 ///
 /// 気音の量を合わせる場所は**放射の後**でなければならない。
@@ -891,10 +963,14 @@ pub fn synth_consonant_banded(c: Consonant, duration_ms: f64, f0_hz: f64, noise:
         }
         // 接近音: その位置の短い有声区間 (鼻音と同じ 2 フォルマント合成) で近似
         Consonant::Approximant { f1, f2 } => {
-            normalize_rms(
-                synth_consonant(Consonant::Nasal { f1, f2 }, duration_ms, noise),
-                TARGET_RMS,
-            )
+            if voiced_sonorant_enabled() {
+                normalize_rms(synth_sonorant_voiced(f1, f2, duration_ms, f0_hz), TARGET_RMS)
+            } else {
+                normalize_rms(
+                    synth_consonant(Consonant::Nasal { f1, f2 }, duration_ms, noise),
+                    TARGET_RMS,
+                )
+            }
         }
         // 破擦音: 破裂 (前半) + 摩擦 (後半) を連結
         Consonant::Affricate {
@@ -924,7 +1000,13 @@ pub fn synth_consonant_banded(c: Consonant, duration_ms: f64, f0_hz: f64, noise:
         // 初版は素通ししており、mo だけ RMS 4189 と他子音 5657 より 26% 小さかった。
         // これは「全子音を同一 RMS に揃える」という本関数自身の宣言に反する実装バグ
         // (独立レビューで発覚)。既存 `synth_consonant` 側の 2026-05-30 校正は変えない。
-        Consonant::Nasal { .. } => normalize_rms(synth_consonant(c, duration_ms, noise), TARGET_RMS),
+        Consonant::Nasal { f1, f2 } => {
+            if voiced_sonorant_enabled() {
+                normalize_rms(synth_sonorant_voiced(f1, f2, duration_ms, f0_hz), TARGET_RMS)
+            } else {
+                normalize_rms(synth_consonant(c, duration_ms, noise), TARGET_RMS)
+            }
+        }
         Consonant::None => Vec::new(),
     }
 }
