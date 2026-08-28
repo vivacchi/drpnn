@@ -62,7 +62,15 @@ use std::io::Read;
 const CORPUS: &str = "../data/corpus/roleplay_kana.txt";
 const F0S: [f64; 4] = [100.0, 130.0, 160.0, 200.0];
 const N_VAR: usize = 4;
-const STEPS_PER_FRAME: usize = 20;   // 10ms
+/// 読み出しのフレーム長 [step]。既定 20 (= 10ms)。
+///
+/// **② M1 の読み出し時間窓の掃引 (2026-08-28)**: `DRPNN_FRAME_STEPS` で 20/80/240
+/// (10/40/120ms) を掃引する。M1 の再帰と遅延 (2-40 step) は**音節スケールの統合**が
+/// できるはずで、それは M0.5 に原理的にできない。**掃引は全列 (M0.5/CN40/M1) に
+/// 同じに掛かる** — M1 だけが長い窓で伸びるかを見る。
+fn frame_steps() -> usize {
+    std::env::var("DRPNN_FRAME_STEPS").ok().and_then(|v| v.parse().ok()).unwrap_or(20).max(1)
+}
 const N_PERM: usize = 400;
 /// M1 の伝導遅延の代表値 = delay_range (2,40) の中央 21 step。**網自身の定数から決まる。**
 const M1_DELAY_STEPS: usize = 21;
@@ -139,7 +147,7 @@ fn battery(net: &ThermoNetwork, co: &Cochlea, cn: &CochlearNucleus) -> Readout {
             assert_eq!(sk, 0, "未対応の単語: {}", ws[w]);
             let wave = synth_utterance(&m, F0S[v], &mut noise);
             let n_steps = wave.len() / SAMPLES_PER_STEP;
-            let n_frames = n_steps / STEPS_PER_FRAME;
+            let n_frames = n_steps / frame_steps();
             let mut f84 = vec![0f64; n_frames * N_CN_OUTPUT];
             let mut f40 = vec![0f64; n_frames * 40];
             let mut fm1 = vec![0f64; n_frames * n_out];
@@ -148,7 +156,7 @@ fn battery(net: &ThermoNetwork, co: &Cochlea, cn: &CochlearNucleus) -> Readout {
                 if chunk.len() < SAMPLES_PER_STEP { break; }
                 let m0 = co.process_step(chunk);
                 let cno = cn.process_step(&m0);
-                let fr = step / STEPS_PER_FRAME;
+                let fr = step / frame_steps();
                 if fr < n_frames {
                     for (i, &x) in cno.iter().enumerate() { if x != 0 { f84[fr * N_CN_OUTPUT + i] += 1.0; } }
                     // CN40 = bushy 40ch だけ (**次元をそろえた対照**)
@@ -159,7 +167,7 @@ fn battery(net: &ThermoNetwork, co: &Cochlea, cn: &CochlearNucleus) -> Readout {
                         m1_total += 1.0;
                         if fr < n_frames { fm1[fr * n_out + oi] += 1.0; }
                         // **伝導遅延の補正列**: 応答を M1_DELAY_STEPS ぶん前に戻して数える
-                        let sd = step.saturating_sub(M1_DELAY_STEPS) / STEPS_PER_FRAME;
+                        let sd = step.saturating_sub(M1_DELAY_STEPS) / frame_steps();
                         if sd < n_frames && step >= M1_DELAY_STEPS { fm1d[sd * n_out + oi] += 1.0; }
                     }
                 }
@@ -286,6 +294,9 @@ fn main() {
     let (mut co, mut cn) = (Cochlea::new(), CochlearNucleus::new());
     let mut noise = LfsrNoise::new(0xACE1);
 
+    let loop_n: usize = std::env::var("DRPNN_CORPUS_LOOP").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    if loop_n > 0 { println!("  **【ループ腕】最初の {} モーラを繰り返す (新素材なし)**", loop_n); }
+    println!("  フレーム長 = {} step ({} ms)", frame_steps(), frame_steps() as f64 * 0.5);
     let mut rows: Vec<(usize, f64, f64, f64, f64, f64, usize, usize)> = Vec::new();
     let mut null95 = 0f64;
     let mut nullb = 0f64;
@@ -307,8 +318,12 @@ fn main() {
             next += 1;
         }
         if i == moras.len() { break; }
+        // **① 多様性仮説の切り分け (2026-08-28)**: DRPNN_CORPUS_LOOP=N で
+        // **最初の N モーラを繰り返す** (新しい素材を一切与えない)。
+        // 頭打ちがコーパス多様性の限界なら、fresh (通常) と loop で差が出るはず。
+        let mi = if loop_n > 0 { i % loop_n } else { i };
         let f0 = F0S[i % N_VAR];   // **コーパスも F0 を変える**
-        let w = synth_utterance(std::slice::from_ref(&moras[i]), f0, &mut noise);
+        let w = synth_utterance(std::slice::from_ref(&moras[mi]), f0, &mut noise);
         for chunk in w.chunks(SAMPLES_PER_STEP) {
             if chunk.len() < SAMPLES_PER_STEP { break; }
             let m0 = co.process_step(chunk);

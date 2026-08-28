@@ -355,3 +355,7 @@ path = "src_phase2_f/bin/corpus_word_learning.rs"
 [[bin]]
 name = "plasticity_census"
 path = "src_phase2_f/bin/plasticity_census.rs"
+
+[[bin]]
+name = "synapse_turnover"
+path = "src_phase2_f/bin/synapse_turnover.rs"
