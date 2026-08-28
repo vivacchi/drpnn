@@ -118,6 +118,46 @@ pub fn set_conductance_decay_m1(w: i32) {
     CONDUCTANCE_DECAY_M1.store(w.max(1), std::sync::atomic::Ordering::Relaxed);
 }
 
+/// **M2 の conductance 受動減衰の周期** [step]。(2026-08-28・§14.53)
+///
+/// **M1 の D 案 (§14.49) を M2 にも引き継ぐ (ユーザー承認)。**
+/// 受動減衰は同じ物理対象への同じ文献是正 (early-LTP 1〜3 時間) であり、
+/// M2 を 1,000 のままにすると「296 モーラで切断」という治したばかりの病理を
+/// M2 で再現することが予測できる。しかも M2 の入力は M1 の疎な出力なので
+/// LTP 機会が少なく、切断はもっと速いはず。
+/// `DRPNN_M2_CONDUCTANCE_DECAY` で戻せる (1000 = 旧既定)。
+pub fn conductance_decay_m2() -> i32 {
+    static V: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+    use std::sync::atomic::Ordering;
+    let v = V.load(Ordering::Relaxed);
+    if v < 0 {
+        let w = std::env::var("DRPNN_M2_CONDUCTANCE_DECAY").ok()
+            .and_then(|s| s.parse::<i32>().ok()).unwrap_or(100_000).max(1);
+        V.store(w, Ordering::Relaxed);
+        return w;
+    }
+    v
+}
+
+/// **M2 の因果窓** [step]。(2026-08-28・§14.53)
+///
+/// **M1 の 40 step は引き継がない。** M1 の旧 160 が「ただの既定値」だったのに対し、
+/// **M2 の 320 (160 ms) は M2_A2_DESIGN.md §2.4 の明示された設計判断 (音節スケール) であり、
+/// M2 で検証する仮説そのものである。** 上書きしたら仮説を消してしまう。
+/// `DRPNN_M2_CAUSAL_WINDOW` で A/B できる (既定 320 = 設計値)。
+pub fn causal_window_m2() -> i32 {
+    static V: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+    use std::sync::atomic::Ordering;
+    let v = V.load(Ordering::Relaxed);
+    if v < 0 {
+        let w = std::env::var("DRPNN_M2_CAUSAL_WINDOW").ok()
+            .and_then(|s| s.parse::<i32>().ok()).unwrap_or(320).max(2);
+        V.store(w, Ordering::Relaxed);
+        return w;
+    }
+    v
+}
+
 /// **M1 の因果窓** [step]。(2026-08-27)
 ///
 /// ## なぜ変えたか
@@ -415,9 +455,9 @@ impl ThermoNetworkConfig {
             dt_ms: 0.5,
             enable_up_down: false,
             io_layout: Some(IoLayout { input_positions, output_positions }),
-            causal_window: 320,  // M2 = 160ms 因果窓 (音節スケール、 M2_A2_DESIGN.md §2.4)
+            causal_window: causal_window_m2(),  // 既定 320 = 160ms (音節スケール、 M2_A2_DESIGN.md §2.4)
             threshold_diversity_std: 0,  // M2 でも default OFF (実験で明示的に設定)
-            conductance_decay_interval: 1000,
+            conductance_decay_interval: conductance_decay_m2(),  // 既定 100,000 (D 案の引き継ぎ・§14.53)
             vitality_decay_interval: 10000,
         }
     }
