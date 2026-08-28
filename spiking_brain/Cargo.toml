@@ -363,3 +363,7 @@ path = "src_phase2_f/bin/synapse_turnover.rs"
 [[bin]]
 name = "corpus_m2_learning"
 path = "src_phase2_f/bin/corpus_m2_learning.rs"
+
+[[bin]]
+name = "mora_order"
+path = "src_phase2_f/bin/mora_order.rs"
