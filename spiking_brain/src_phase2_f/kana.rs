@@ -96,6 +96,54 @@ pub fn set_vot(on: bool) {
     VOT_ON.store(on as u8, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// 無声摩擦音の解放後気音 (10ms)。**既定 ON** (2026-08-28・§14.51 案2)。
+/// `DRPNN_FRIC_VOT=0` で従来 (気音なし = さ の接合部に −180dB の谷)。
+static FRIC_VOT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
+
+/// 有効か。初回だけ環境変数を読む。**乱数は使わない。**
+pub fn fric_vot_enabled() -> bool {
+    use std::sync::atomic::Ordering;
+    let v = FRIC_VOT.load(Ordering::Relaxed);
+    if v == 2 {
+        let on = std::env::var("DRPNN_FRIC_VOT").map(|s| s != "0").unwrap_or(true);
+        FRIC_VOT.store(on as u8, Ordering::Relaxed);
+        return on;
+    }
+    v == 1
+}
+
+/// 実行時に切り替える (対照実験用)。
+pub fn set_fric_vot(on: bool) {
+    FRIC_VOT.store(on as u8, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// /h/ を「雑音を後続母音の声道に通したもの」として合成する。**既定 ON** (2026-08-28・§14.51 /h/物理)。
+///
+/// **声門摩擦音の物理的真実**: /h/ は声門での乱流が**声道全体**を通ったもの =
+/// 無声化した母音である。入り口監査の所見 M6 (「/h/ が後続母音と無関係な固定帯域ノイズ
+/// なのは誤り」) への是正。**発明ではない。**
+/// 歯擦音 (さ行・し) には適用しない — 歯擦音は前腔だけを励振するので、
+/// 全声道に通すのは物理的に誤り (Klatt が並列合成を選んだ理由)。
+/// `DRPNN_GLOTTAL_H=0` で従来 (固定帯域ノイズ 500-4000)。
+static GLOTTAL_H: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
+
+/// 有効か。初回だけ環境変数を読む。**乱数は使わない。**
+pub fn glottal_h_enabled() -> bool {
+    use std::sync::atomic::Ordering;
+    let v = GLOTTAL_H.load(Ordering::Relaxed);
+    if v == 2 {
+        let on = std::env::var("DRPNN_GLOTTAL_H").map(|s| s != "0").unwrap_or(true);
+        GLOTTAL_H.store(on as u8, Ordering::Relaxed);
+        return on;
+    }
+    v == 1
+}
+
+/// 実行時に切り替える (対照実験用)。
+pub fn set_glottal_h(on: bool) {
+    GLOTTAL_H.store(on as u8, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// **VOT (Voice Onset Time)** = 破裂の解放から声帯振動が始まるまでの時間 [ms]。(2026-08-27)
 ///
 /// 日本語の語頭無声破裂音の代表値 (Shimizu 1996 / Riney et al. 2007)。
@@ -116,6 +164,12 @@ fn vot_ms_of(row: char) -> f64 {
         't' => 25.0,          // 歯茎 無声破裂
         'k' => 45.0,          // 軟口蓋 無声破裂 (**最も長い**)
         'c' | 'C' => 10.0,    // 無声破擦 (つ [ts] ・ち [tɕ]) — 摩擦の後の気音は短い
+        // §14.51 案2 (2026-08-28): **無声摩擦音にも解放後の気音 10ms。**
+        // 値は破擦音の 10ms の転用 (**発明ではない**)。これが無いと連続合成で
+        // 「摩擦音の間、声道への入力ゼロ → 共鳴器が死ぬ → 有声化の瞬間にパルス閉相なら
+        //  厳密にゼロ」= さ の接合部の −180dB の谷 (§14.41.3) になる。
+        // 気音は毎サンプル雑音で声道を叩くので、ゼロ状態から即座に立ち上がる。
+        's' | 'S' | 'h' if fric_vot_enabled() => 10.0,
         _ => 0.0,             // 有声破裂 (前有声で符号化) / 摩擦 / 鼻音 / 接近 / 弾き
     }
 }
@@ -437,6 +491,45 @@ mod tests {
 // 連続合成 (2026-08-27)
 // ──────────────────────────────────────────────────────────────
 
+/// 連続合成の気音 (asp) 区間を、**放射後の RMS で有声駆動と同じ音量に合わせる**か。
+/// **既定 ON** (2026-08-28・§14.51)。`DRPNN_ASP_MATCH=0` で従来 (整合なし)。
+///
+/// ## なぜ
+///
+/// G98f で実測: 無声/有声の最小対で、母音頭 30-45ms (気音区間) の RMS 比が **12〜52 倍**。
+/// 雑音源 (±16384) は声帯パルス列 (峰 4096・duty 40%) よりはるかに強く、
+/// さらに放射 (+6dB/oct) が平坦スペクトルの雑音を優遇するため。
+/// **回帰テストの有声性 100.0% は、周期性でなくこの音量差を読んだ疑いが濃い。**
+///
+/// これは §14.41 の連続合成が最初から持っていた欠陥である (破裂音の VOT も同罪)。
+/// **§14.34 で離散経路に施した是正 (「気音は放射の後で合わせる」) を、
+/// 連続経路に適用し忘れていた。** 同じ原則の適用であり、発明ではない。
+///
+/// ## どう合わせるか
+///
+/// asp 区間の頭で、**同じ声道状態・同じ声道軌道**に対して
+/// (a) 声帯パルスで駆動した放射後 RMS (基準) と (b) 雑音で駆動した放射後 RMS を
+/// 局所 2 パスで測り、比で雑音源を補正する。系は線形なので 1 回で足りる。
+/// **目標値は「同じ区間を有声で鳴らしたときの音量」そのもの** — 新しいパラメータは無い。
+static ASP_MATCH: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
+
+/// 有効か。初回だけ環境変数を読む。**乱数は使わない。**
+pub fn asp_match_enabled() -> bool {
+    use std::sync::atomic::Ordering;
+    let v = ASP_MATCH.load(Ordering::Relaxed);
+    if v == 2 {
+        let on = std::env::var("DRPNN_ASP_MATCH").map(|s| s != "0").unwrap_or(true);
+        ASP_MATCH.store(on as u8, Ordering::Relaxed);
+        return on;
+    }
+    v == 1
+}
+
+/// 実行時に切り替える (対照実験用)。
+pub fn set_asp_match(on: bool) {
+    ASP_MATCH.store(on as u8, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// 連続合成を使うか。**既定 ON** (2026-08-27・§14.41 の A/B のあと)。
 /// `DRPNN_CONTINUOUS=0` で旧経路 (断片連結)。
 static CONTINUOUS: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
@@ -540,10 +633,23 @@ pub fn synth_utterance_continuous(moras: &[Mora], f0_hz: f64, noise: &mut LfsrNo
                         for i in (s + cn_s)..(s + cn_s + vot_n).min(n) { asp[i] = true; }
                     }
                     Consonant::Fricative { freq_low, freq_high, voiced } => {
-                        write_fric(&mut fric, noise, s, s + cn_s, freq_low, freq_high);
-                        for i in s..(s + cn_s).min(n) { vg[i] = if voiced { 1024 } else { 0 }; }
-                        if let Some(l) = locus { anchors.push((s + cn_s, l)); }
-                        anchors.push((s + cn_s + tr_s, vowel.formants_hz));
+                        // §14.51 (2026-08-28): **/h/ = 無声摩擦音で口腔の locus を持たない
+                        // 唯一の子音** (声門なので位置が無い・§14.27 の設計判断がそのまま
+                        // 判別子になる。enum に手を入れる必要が無い)。
+                        // 物理: /h/ は雑音が**後続母音の声道全体**を通ったもの = 無声化した母音。
+                        // 歯擦音には適用しない (前腔だけの励振なので全声道は物理的に誤り)。
+                        let is_glottal = !voiced && locus.is_none() && glottal_h_enabled();
+                        if is_glottal {
+                            // 帯域ノイズは使わない。**気音と同じ機構**で声道を雑音駆動する。
+                            for i in s..(s + cn_s).min(n) { asp[i] = true; vg[i] = 4096; }
+                            // /h/ は自分の声道形を持たないので、最初から後続母音へ向かう
+                            anchors.push((s + tr_s, vowel.formants_hz));
+                        } else {
+                            write_fric(&mut fric, noise, s, s + cn_s, freq_low, freq_high);
+                            for i in s..(s + cn_s).min(n) { vg[i] = if voiced { 1024 } else { 0 }; }
+                            if let Some(l) = locus { anchors.push((s + cn_s, l)); }
+                            anchors.push((s + cn_s + tr_s, vowel.formants_hz));
+                        }
                         for i in (s + cn_s)..(s + spm).min(n) { vg[i] = 4096; }
                         for i in (s + cn_s)..(s + cn_s + vot_n).min(n) { asp[i] = true; }
                     }
@@ -619,12 +725,54 @@ pub fn synth_utterance_continuous(moras: &[Mora], f0_hz: f64, noise: &mut LfsrNo
         .collect();
     let (mut ax1, mut ax2) = (0i64, 0i64);
     let mut a_cache: (f64, i64, i64, i64) = (0.0, 0, 0, 0);
-    let mut voiced = Vec::with_capacity(n);
+    let mut voiced: Vec<i32> = Vec::with_capacity(n);
+    // 気音の音量整合 (§14.51): 現在の asp 区間に適用する雑音の倍率 (分子/分母)。
+    let (mut asp_num, mut asp_den) = (1i64, 1i64);
     for i in 0..n {
         for (j, r) in rs.iter_mut().enumerate() {
             r.retune(form[i][j], BW[j], 4.0, SAMPLE_RATE_HZ);
         }
-        let src = if asp[i] { noise.next_sample() } else { pulse[i] };
+        // ---- asp 区間の頭で局所 2 パス較正する (§14.51・原則は §14.34 と同一) ----
+        if asp[i] && (i == 0 || !asp[i - 1]) {
+            if asp_match_enabled() {
+                let i1 = (i..n).find(|&k| !asp[k]).unwrap_or(n);
+                // (基準) 同じ声道状態・同じ軌道を**声帯パルス**で駆動した放射後 RMS
+                let run = |use_noise: bool, nz: &mut LfsrNoise, rs0: &Vec<FormantResonator>| -> i64 {
+                    let mut rc = rs0.clone();
+                    let mut prev = *voiced.last().unwrap_or(&0);
+                    let mut sq: i64 = 0;
+                    for k in i..i1 {
+                        for (j, r) in rc.iter_mut().enumerate() {
+                            r.retune(form[k][j], BW[j], 4.0, SAMPLE_RATE_HZ);
+                        }
+                        let src = if use_noise { nz.next_sample() } else { pulse[k] };
+                        let x = ((src as i64 * vg[k] as i64) >> 12) as i32;
+                        let mut y = 0i32;
+                        for r in rc.iter_mut() { y = y.saturating_add(r.process(x)); }
+                        let d = y.saturating_sub(prev) as i64;
+                        prev = y;
+                        sq += d * d;
+                    }
+                    sq
+                };
+                let mut nz = noise.clone();   // 実走行と同じ雑音列で測る
+                let ref_sq = run(false, &mut nz.clone(), &rs);
+                let probe_sq = run(true, &mut nz, &rs);
+                if probe_sq > 0 && ref_sq > 0 {
+                    // 倍率 = sqrt(ref/probe)。整数で保持 (分子/分母)。
+                    asp_num = ((ref_sq as f64 / probe_sq as f64).sqrt() * 4096.0) as i64;
+                    asp_den = 4096;
+                    if asp_num == 0 { asp_num = 1; }
+                } else {
+                    asp_num = 1; asp_den = 1;
+                }
+            } else {
+                asp_num = 1; asp_den = 1;
+            }
+        }
+        let src = if asp[i] {
+            ((noise.next_sample() as i64 * asp_num) / asp_den) as i32
+        } else { pulse[i] };
         let x = ((src as i64 * vg[i] as i64) >> 12) as i32;
         let mut y = 0i32;
         for r in rs.iter_mut() { y = y.saturating_add(r.process(x)); }
