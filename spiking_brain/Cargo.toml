@@ -367,3 +367,7 @@ path = "src_phase2_f/bin/corpus_m2_learning.rs"
 [[bin]]
 name = "mora_order"
 path = "src_phase2_f/bin/mora_order.rs"
+
+[[bin]]
+name = "state_divergence"
+path = "src_phase2_f/bin/state_divergence.rs"
