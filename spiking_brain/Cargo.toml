@@ -375,3 +375,7 @@ path = "src_phase2_f/bin/state_divergence.rs"
 [[bin]]
 name = "invariance_signature"
 path = "src_phase2_f/bin/invariance_signature.rs"
+
+[[bin]]
+name = "ei_census"
+path = "src_phase2_f/bin/ei_census.rs"

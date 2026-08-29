@@ -518,6 +518,14 @@ pub struct ThermoNetwork {
     /// 入射シナプス (post 別)
     pub in_syn: Vec<Vec<usize>>,
 
+    /// **配送された興奮性電流の累積** (2026-08-29 追加・計測専用。振る舞いには一切使わない)。
+    ///
+    /// §14.57 で「軌道の信頼性の崩壊」が出た。E/I バランスの診断のため、
+    /// 配送ループで実際に流れた電流を符号別に数える (`n_ltp` と同じ流儀)。
+    pub stat_exc_delivered: u64,
+    /// **配送された抑制性電流の累積** (同上・絶対値)。
+    pub stat_inh_delivered: u64,
+
     /// 軸索成長で作られた累積シナプス数
     pub axons_grown: u64,
     /// 刈り取られた (exists が一度 true から false に落ちた) 累積カウント
@@ -864,6 +872,8 @@ impl ThermoNetwork {
             output_neurons,
             out_syn,
             in_syn,
+            stat_exc_delivered: 0,
+            stat_inh_delivered: 0,
             axons_grown: 0,
             axons_pruned: 0,
         }
@@ -1025,6 +1035,9 @@ impl ThermoNetwork {
                 let arrival_slot = (self.delivery_head + s_delay as usize) % self.max_delay;
                 let scaled = s_cond / SIGNAL_SCALE_DIVISOR;
                 let signal = if pre_is_inh { -scaled } else { scaled };
+                // 計測専用 (§14.58 E/I 診断)。振る舞いには一切使わない。
+                if pre_is_inh { self.stat_inh_delivered += scaled as u64; }
+                else { self.stat_exc_delivered += scaled as u64; }
                 self.delivery_queue[arrival_slot][s_post] =
                     self.delivery_queue[arrival_slot][s_post].saturating_add(signal);
                 // Fork F: 信号通過で vitality 増加 (use-dependent maintenance)
@@ -1125,6 +1138,9 @@ impl ThermoNetwork {
                 let arrival_slot = (self.delivery_head + s_delay as usize) % self.max_delay;
                 let scaled = s_cond / SIGNAL_SCALE_DIVISOR;
                 let signal = if pre_is_inh { -scaled } else { scaled };
+                // 計測専用 (§14.58 E/I 診断)。振る舞いには一切使わない。
+                if pre_is_inh { self.stat_inh_delivered += scaled as u64; }
+                else { self.stat_exc_delivered += scaled as u64; }
                 self.delivery_queue[arrival_slot][s_post] =
                     self.delivery_queue[arrival_slot][s_post].saturating_add(signal);
                 // Fork F: 信号通過で vitality 増加
