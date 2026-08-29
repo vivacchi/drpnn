@@ -86,19 +86,28 @@ fn m2_input(m1: &ThermoNetwork, fired: &[usize], n_in: usize) -> Vec<i32> {
 }
 
 /// 語を流して末尾モーラ中の出力スパイク数 [段 3 本] を返す。
+/// 5 列: [CN84 / M1出力40 / **M1全皮質** / M2出力20 / **M2全皮質**]
+///
+/// **全皮質列 (2026-08-29・§14.60 読み出しの拡幅)**: §14.58 で「皮質の PR は 78% と高く、
+/// 低実効次元は出力層 20ch の側にある」と出た。**開口の上限**を測る —
+/// 全集団の読み出しがゲートを通れば、残る差は「表現の欠如」でなく「開口の狭さ」と確定する。
+/// **モデルには一切触れない (計器のみ)。**
 fn tail_spikes(word: &str, seed: u16, f0: f64,
                co0: &Cochlea, cn0: &CochlearNucleus,
-               m10: &ThermoNetwork, m20: &ThermoNetwork) -> [Vec<f64>; 3] {
+               m10: &ThermoNetwork, m20: &ThermoNetwork) -> [Vec<f64>; 5] {
     let (mut co, mut cn, mut m1, mut m2) = (co0.clone(), cn0.clone(), m10.clone(), m20.clone());
     let mut noise = LfsrNoise::new(seed);
     let (m, sk) = moras_from_kana(word);
     assert_eq!(sk, 0, "未対応: {}", word);
     let wave = synth_utterance(&m, f0, &mut noise);
     let tail = (2 * MORA_STEPS)..(3 * MORA_STEPS);
+    let n1_in = m1.input_neurons.len();
     let n2_in = m2.input_neurons.len();
     let mut out = [vec![0f64; N_CN_OUTPUT],
                    vec![0f64; m1.output_neurons.len()],
-                   vec![0f64; m2.output_neurons.len()]];
+                   vec![0f64; m1.n_neurons() - n1_in],
+                   vec![0f64; m2.output_neurons.len()],
+                   vec![0f64; m2.n_neurons() - n2_in]];
     for (step, chunk) in wave.chunks(SAMPLES_PER_STEP).enumerate() {
         if chunk.len() < SAMPLES_PER_STEP { break; }
         let m0 = co.process_step(chunk);
@@ -110,9 +119,11 @@ fn tail_spikes(word: &str, seed: u16, f0: f64,
             for (i, &x) in cno.iter().enumerate() { if x != 0 { out[0][i] += 1.0; } }
             for &nid in &fired1 {
                 if let Some(oi) = m1.output_index_of(nid) { out[1][oi] += 1.0; }
+                if nid >= n1_in { out[2][nid - n1_in] += 1.0; }
             }
             for nid in fired2 {
-                if let Some(oi) = m2.output_index_of(nid) { out[2][oi] += 1.0; }
+                if let Some(oi) = m2.output_index_of(nid) { out[3][oi] += 1.0; }
+                if nid >= n2_in { out[4][nid - n2_in] += 1.0; }
             }
         }
     }
@@ -132,7 +143,7 @@ fn pearson(a: &[f64], b: &[f64]) -> Option<f64> {
 
 /// [組][変種][段] の署名 Δ
 fn signatures(co: &Cochlea, cn: &CochlearNucleus, m1: &ThermoNetwork, m2: &ThermoNetwork)
-    -> Vec<Vec<[Vec<f64>; 3]>> {
+    -> Vec<Vec<[Vec<f64>; 5]>> {
     let mut sig = Vec::new();
     for (g, t) in TRIPLES.iter().enumerate() {
         let abc = format!("{}{}{}", t[0], t[1], t[2]);
@@ -142,8 +153,8 @@ fn signatures(co: &Cochlea, cn: &CochlearNucleus, m1: &ThermoNetwork, m2: &Therm
             let seed = (0x2468u16.wrapping_add(g as u16 * 89).wrapping_add(v as u16 * 7)) | 1;
             let a = tail_spikes(&abc, seed, F0S[v], co, cn, m1, m2);
             let b = tail_spikes(&bac, seed, F0S[v], co, cn, m1, m2);
-            let mut d: [Vec<f64>; 3] = [vec![], vec![], vec![]];
-            for s in 0..3 {
+            let mut d: [Vec<f64>; 5] = [vec![], vec![], vec![], vec![], vec![]];
+            for s in 0..N_STAGES {
                 d[s] = a[s].iter().zip(b[s].iter()).map(|(x, y)| x - y).collect();
             }
             per_var.push(d);
@@ -153,17 +164,17 @@ fn signatures(co: &Cochlea, cn: &CochlearNucleus, m1: &ThermoNetwork, m2: &Therm
     sig
 }
 
-struct ArmStats { within: [f64; 3], within_n: [usize; 3], null95: [f64; 3], null95_x: [f64; 3], over: [usize; 3], over_x: [usize; 3], pairs: [usize; 3] }
+struct ArmStats { within: [f64; N_STAGES], within_n: [usize; N_STAGES], null95: [f64; N_STAGES], null95_x: [f64; N_STAGES], over: [usize; N_STAGES], over_x: [usize; N_STAGES], pairs: [usize; N_STAGES] }
 
-fn analyze(sig: &Vec<Vec<[Vec<f64>; 3]>>) -> ArmStats {
+fn analyze(sig: &Vec<Vec<[Vec<f64>; 5]>>) -> ArmStats {
     let ng = sig.len();
-    let mut within = [0f64; 3];
-    let mut within_n = [0usize; 3];
-    let mut over = [0usize; 3];
-    let mut over_x = [0usize; 3];
-    let mut pairs = [0usize; 3];
-    let mut null: Vec<Vec<f64>> = vec![Vec::new(), Vec::new(), Vec::new()];
-    let mut null_x: Vec<Vec<f64>> = vec![Vec::new(), Vec::new(), Vec::new()];
+    let mut within = [0f64; N_STAGES];
+    let mut within_n = [0usize; N_STAGES];
+    let mut over = [0usize; N_STAGES];
+    let mut over_x = [0usize; N_STAGES];
+    let mut pairs = [0usize; N_STAGES];
+    let mut null: Vec<Vec<f64>> = vec![Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+    let mut null_x: Vec<Vec<f64>> = vec![Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()];
     // 群間 (対照)。**2 種類**:
     //   null   = 宣言どおり (全変種組・同一変種の対を含む)
     //   null_x = **条件を揃えた帰無** (v1 != v2 のみ)。本統計は変種間相関なので、
@@ -171,7 +182,7 @@ fn analyze(sig: &Vec<Vec<[Vec<f64>; 3]>>) -> ArmStats {
     //            (2026-08-29 の走行で発見した計器の非対称。宣言側も残して両方報告する。)
     for g1 in 0..ng { for g2 in 0..ng { if g1 == g2 { continue; }
         for v1 in 0..N_VAR { for v2 in 0..N_VAR {
-            for s in 0..3 {
+            for s in 0..N_STAGES {
                 if let Some(r) = pearson(&sig[g1][v1][s], &sig[g2][v2][s]) {
                     null[s].push(r);
                     if v1 != v2 { null_x[s].push(r); }
@@ -179,9 +190,9 @@ fn analyze(sig: &Vec<Vec<[Vec<f64>; 3]>>) -> ArmStats {
             }
         }}
     }}
-    let mut null95 = [0f64; 3];
-    let mut null95_x = [0f64; 3];
-    for s in 0..3 {
+    let mut null95 = [0f64; N_STAGES];
+    let mut null95_x = [0f64; N_STAGES];
+    for s in 0..N_STAGES {
         null[s].sort_by(|a, b| a.partial_cmp(b).unwrap());
         null95[s] = if null[s].is_empty() { 1.0 }
                     else { null[s][(null[s].len() as f64 * 0.95) as usize] };
@@ -192,7 +203,7 @@ fn analyze(sig: &Vec<Vec<[Vec<f64>; 3]>>) -> ArmStats {
     // 群内・変種間
     for g in 0..ng {
         for v1 in 0..N_VAR { for v2 in (v1 + 1)..N_VAR {
-            for s in 0..3 {
+            for s in 0..N_STAGES {
                 if let Some(r) = pearson(&sig[g][v1][s], &sig[g][v2][s]) {
                     within[s] += r;
                     within_n[s] += 1;
@@ -203,16 +214,16 @@ fn analyze(sig: &Vec<Vec<[Vec<f64>; 3]>>) -> ArmStats {
             }
         }}
     }
-    for s in 0..3 { if within_n[s] > 0 { within[s] /= within_n[s] as f64; } }
+    for s in 0..N_STAGES { if within_n[s] > 0 { within[s] /= within_n[s] as f64; } }
     ArmStats { within, within_n, null95, null95_x, over, over_x, pairs }
 }
 
 fn print_arm(label: &str, st: &ArmStats) {
-    const STAGES: [&str; 3] = ["M0.5", "M1", "M2"];
+    const STAGES: [&str; N_STAGES] = ["M0.5(84)", "M1出力(40)", "**M1全皮質**", "M2出力(20)", "**M2全皮質**"];
     println!("--- {} ---", label);
     println!("  {:<6} | {:>12} | {:>14} | {:>18} | {:>14}", "段", "群内平均相関",
              "帰無95%(宣言)", "**帰無95%(v1!=v2)**", "揃えた帰無超え");
-    for s in 0..3 {
+    for s in 0..N_STAGES {
         println!("  {:<6} | {:>12.3} | {:>14.3} | {:>18.3} | {:>10}/{}", STAGES[s], st.within[s],
                  st.null95[s], st.null95_x[s], st.over_x[s], st.pairs[s]);
     }
@@ -222,11 +233,13 @@ fn print_arm(label: &str, st: &ArmStats) {
 /// 共通軌道ずれ) を引く。**群間相関が 0.6 に達する = 分岐が共通モードに支配されている**
 /// ことが判明したため。除去後に群内相関が残れば「共通モードの下に順序特異な符号がある」、
 /// 消えれば「順序特異な成分に不変性が無い」— 道が分かれる。
-fn remove_common_mode(sig: &Vec<Vec<[Vec<f64>; 3]>>) -> Vec<Vec<[Vec<f64>; 3]>> {
+const N_STAGES: usize = 5;
+
+fn remove_common_mode(sig: &Vec<Vec<[Vec<f64>; 5]>>) -> Vec<Vec<[Vec<f64>; 5]>> {
     let ng = sig.len();
     let mut out = sig.clone();
     for v in 0..N_VAR {
-        for s in 0..3 {
+        for s in 0..N_STAGES {
             let d = sig[0][v][s].len();
             let mut mean = vec![0f64; d];
             for g in 0..ng { for i in 0..d { mean[i] += sig[g][v][s][i]; } }
@@ -287,9 +300,9 @@ fn main() {
 
     println!();
     println!("=== 判定 ===");
-    const STAGES: [&str; 3] = ["M0.5", "M1", "M2"];
+    const STAGES: [&str; N_STAGES] = ["M0.5(84)", "M1出力(40)", "**M1全皮質**", "M2出力(20)", "**M2全皮質**"];
     println!("  【共通モード除去後 (本判定)】");
-    for s in 0..3 {
+    for s in 0..N_STAGES {
         let verdict = if st1c.within[s] > st1c.null95_x[s] {
             "**共通モードの下に順序特異な符号がある — 冗長化の道**"
         } else if st1c.within[s] > 0.05 {
@@ -302,7 +315,7 @@ fn main() {
     }
     println!();
     println!("  【除去前 (参考)】");
-    for s in 0..3 {
+    for s in 0..N_STAGES {
         let verdict = if st1.within[s] > st1.null95_x[s] {
             "**符号 — 弱くても変種を跨いで再現している (量・冗長化の道)**"
         } else if st1.within[s] > 0.0 {
