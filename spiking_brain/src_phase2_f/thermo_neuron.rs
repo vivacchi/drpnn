@@ -24,6 +24,49 @@
 /// 3: 4 回バースト発火 + 2-3 step 不応期 (機能的不応期相当)
 pub const ENTHALPY_PER_SPIKE: i32 = 3;
 
+/// **シャント抑制** (2026-08-29・§14.59)。**既定 OFF** (効果測定と採否はユーザー判断)。
+///
+/// ## なぜ
+///
+/// §14.58 で確定: 抑制シナプスは健在だが、**配送電流は興奮の 7.2% しかない** (構造的飢餓)。
+/// 現行の抑制は**減算電流**であり、(a) 膜 0 クランプで大半が捨てられ、
+/// (b) 効果が興奮の強さに比例しない。
+///
+/// **生体の抑制の主要モード (GABA-A) はシャント = 膜コンダクタンスの増加**であり、
+/// これが分裂正規化 (Carandini & Heeger) の物理基盤である。割り算は実装しない —
+/// **漏れ (排出) が膜電位に比例する物理が、結果として割り算として働く。**
+///
+/// ## 形 — 「1:1 で漏れに足す」は現行と数学的に同一なので、それは選べない
+///
+/// この積分器の漏れは定数減算なので `V += E − I − leak` と `V += E − (leak + I)` は同一。
+/// **分裂性は「膜電位に比例した排出」でだけ生まれる**:
+///
+/// ```text
+/// V -= V × I入力 / threshold_base     (I入力 ≥ threshold_base で完全放電)
+/// ```
+///
+/// **正規化子は既存の `threshold_base` (そのニューロンの電圧スケール)** —
+/// 新しい数値を持ち込まない唯一の選択。整数・決定論・局所 (シナプス相手からの入力のみ)・
+/// target 無し。`DRPNN_SHUNT=1` で有効。
+static SHUNT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
+
+/// シャント抑制が有効か。初回だけ環境変数を読む。**乱数は使わない。**
+pub fn shunt_enabled() -> bool {
+    use std::sync::atomic::Ordering;
+    let v = SHUNT.load(Ordering::Relaxed);
+    if v == 2 {
+        let on = std::env::var("DRPNN_SHUNT").map(|s| s == "1").unwrap_or(false);
+        SHUNT.store(on as u8, Ordering::Relaxed);
+        return on;
+    }
+    v == 1
+}
+
+/// 実行時に切り替える (対照実験用)。**false で従来と厳密に同一。**
+pub fn set_shunt(on: bool) {
+    SHUNT.store(on as u8, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// 入力ニューロンに**慣化 (local_entropy → 閾値上昇)** を持たせるか。(2026-08-27・F 案)
 ///
 /// ## なぜ
@@ -350,7 +393,13 @@ impl ThermoNeuron {
     /// 1 クロックの物理プロセス。戻り値: 発火したか
     ///
     /// 判断機構は一切ない。物理プロセスのみで構成。
+    /// 従来 API (E/I 混合入力)。シャント OFF のとき、および CN 側から使われる。
     pub fn update(&mut self, input_current: i32, current_time: i32) -> bool {
+        self.update_ei(input_current, 0, current_time)
+    }
+
+    /// E/I 分離入力版 (2026-08-29・§14.59)。`inh_input = 0` なら従来と厳密に同一。
+    pub fn update_ei(&mut self, input_current: i32, inh_input: i32, current_time: i32) -> bool {
         // (0) B4: spike_trace の自然減衰 (発火痕跡が時間とともに消える)
         if self.spike_trace > 0 { self.spike_trace -= 1; }
 
@@ -385,6 +434,13 @@ impl ThermoNeuron {
         }
         if self.up_state {
             self.membrane = self.membrane.saturating_add(self.up_offset);
+        }
+        // **シャント抑制** (§14.59): 膜電位に比例した排出。I入力 ≥ threshold_base で完全放電。
+        // 正規化子は既存の threshold_base (電圧スケール)。inh_input=0 なら無変化。
+        if inh_input > 0 && self.membrane > 0 {
+            let th = self.threshold_base.max(1);
+            let frac = inh_input.min(th);
+            self.membrane -= ((self.membrane as i64 * frac as i64) / th as i64) as i32;
         }
         self.membrane = self.membrane.saturating_sub(self.leak);
         if self.membrane < 0 { self.membrane = 0; }

@@ -504,6 +504,9 @@ pub struct ThermoNetwork {
 
     /// 遅延配送リングバッファ。delivery_queue[t % max_delay][post_idx] = 到達する信号合計
     delivery_queue: Vec<Vec<i32>>,
+    /// **抑制専用の配送キュー** (§14.59 シャント抑制)。シャント OFF のときは常に空
+    /// (抑制は従来どおり delivery_queue に負の電流として入る)。
+    delivery_queue_inh: Vec<Vec<i32>>,
     delivery_head: usize,
     max_delay: usize,
 
@@ -856,6 +859,7 @@ impl ThermoNetwork {
         // 配送リングバッファ
         let max_delay = (delay_dist.1 as usize + 2).max(20);
         let delivery_queue = vec![vec![0i32; neurons.len()]; max_delay];
+        let delivery_queue_inh = vec![vec![0i32; neurons.len()]; max_delay];
 
         Self {
             config,
@@ -864,6 +868,7 @@ impl ThermoNetwork {
             topology,
             position_index,
             delivery_queue,
+            delivery_queue_inh,
             delivery_head: 0,
             max_delay,
             current_time: 0,
@@ -984,6 +989,9 @@ impl ThermoNetwork {
         for slot in &mut self.delivery_queue {
             for v in slot.iter_mut() { *v = 0; }
         }
+        for slot in &mut self.delivery_queue_inh {
+            for v in slot.iter_mut() { *v = 0; }
+        }
         self.delivery_head = 0;
     }
 
@@ -994,6 +1002,7 @@ impl ThermoNetwork {
     pub fn step_sequential(&mut self, external_input: &[i32]) -> Vec<usize> {
         let n = self.neurons.len();
         let mut current_inputs = std::mem::take(&mut self.delivery_queue[self.delivery_head]);
+        let mut current_inh = std::mem::take(&mut self.delivery_queue_inh[self.delivery_head]);
         for (k, &v) in external_input.iter().enumerate() {
             if k < self.input_neurons.len() {
                 let target = self.input_neurons[k];
@@ -1003,7 +1012,7 @@ impl ThermoNetwork {
         let t_now = self.current_time;
         let mut fired: Vec<usize> = Vec::new();
         for i in 0..n {
-            if self.neurons[i].update(current_inputs[i], t_now) {
+            if self.neurons[i].update_ei(current_inputs[i], current_inh[i], t_now) {
                 fired.push(i);
             }
         }
@@ -1038,8 +1047,15 @@ impl ThermoNetwork {
                 // 計測専用 (§14.58 E/I 診断)。振る舞いには一切使わない。
                 if pre_is_inh { self.stat_inh_delivered += scaled as u64; }
                 else { self.stat_exc_delivered += scaled as u64; }
-                self.delivery_queue[arrival_slot][s_post] =
-                    self.delivery_queue[arrival_slot][s_post].saturating_add(signal);
+                // **シャント抑制** (§14.59): ON なら抑制は専用キューへ (正の量として)。
+                // OFF なら従来どおり負の電流として主キューへ = 厳密に従来と同一。
+                if pre_is_inh && crate::phase2_f::thermo_neuron::shunt_enabled() {
+                    self.delivery_queue_inh[arrival_slot][s_post] =
+                        self.delivery_queue_inh[arrival_slot][s_post].saturating_add(scaled);
+                } else {
+                    self.delivery_queue[arrival_slot][s_post] =
+                        self.delivery_queue[arrival_slot][s_post].saturating_add(signal);
+                }
                 // Fork F: 信号通過で vitality 増加 (use-dependent maintenance)
                 self.synapses[s_idx].on_transmission();
             }
@@ -1077,6 +1093,8 @@ impl ThermoNetwork {
         }
         for v in current_inputs.iter_mut() { *v = 0; }
         self.delivery_queue[self.delivery_head] = current_inputs;
+        for v in current_inh.iter_mut() { *v = 0; }
+        self.delivery_queue_inh[self.delivery_head] = current_inh;
         self.delivery_head = (self.delivery_head + 1) % self.max_delay;
         self.current_time += 1;
         fired
@@ -1087,6 +1105,7 @@ impl ThermoNetwork {
 
         // 1) 配送スロットから今クロックの入力を取り出す (drain して使い切る)
         let mut current_inputs = std::mem::take(&mut self.delivery_queue[self.delivery_head]);
+        let mut current_inh = std::mem::take(&mut self.delivery_queue_inh[self.delivery_head]);
 
         // 2) 外部入力 (input_neurons に対応) を加算
         for (k, &v) in external_input.iter().enumerate() {
@@ -1101,9 +1120,10 @@ impl ThermoNetwork {
         //    par_iter_mut().enumerate().filter_map().collect() は元の順序を保つ
         let t_now = self.current_time;
         let inputs_ref: &[i32] = &current_inputs;
+        let inh_ref: &[i32] = &current_inh;
         let fired: Vec<usize> = self.neurons.par_iter_mut().enumerate()
             .filter_map(|(i, neuron)| {
-                if neuron.update(inputs_ref[i], t_now) { Some(i) } else { None }
+                if neuron.update_ei(inputs_ref[i], inh_ref[i], t_now) { Some(i) } else { None }
             })
             .collect();
         let _ = n;
@@ -1141,8 +1161,15 @@ impl ThermoNetwork {
                 // 計測専用 (§14.58 E/I 診断)。振る舞いには一切使わない。
                 if pre_is_inh { self.stat_inh_delivered += scaled as u64; }
                 else { self.stat_exc_delivered += scaled as u64; }
-                self.delivery_queue[arrival_slot][s_post] =
-                    self.delivery_queue[arrival_slot][s_post].saturating_add(signal);
+                // **シャント抑制** (§14.59): ON なら抑制は専用キューへ (正の量として)。
+                // OFF なら従来どおり負の電流として主キューへ = 厳密に従来と同一。
+                if pre_is_inh && crate::phase2_f::thermo_neuron::shunt_enabled() {
+                    self.delivery_queue_inh[arrival_slot][s_post] =
+                        self.delivery_queue_inh[arrival_slot][s_post].saturating_add(scaled);
+                } else {
+                    self.delivery_queue[arrival_slot][s_post] =
+                        self.delivery_queue[arrival_slot][s_post].saturating_add(signal);
+                }
                 // Fork F: 信号通過で vitality 増加
                 self.synapses[s_idx].on_transmission();
             }
@@ -1189,6 +1216,8 @@ impl ThermoNetwork {
         // 8) 配送スロットをクリアして戻す + リングバッファ進行
         for v in current_inputs.iter_mut() { *v = 0; }
         self.delivery_queue[self.delivery_head] = current_inputs;
+        for v in current_inh.iter_mut() { *v = 0; }
+        self.delivery_queue_inh[self.delivery_head] = current_inh;
         self.delivery_head = (self.delivery_head + 1) % self.max_delay;
 
         // 9) 時間進行
