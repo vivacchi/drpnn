@@ -371,3 +371,7 @@ path = "src_phase2_f/bin/mora_order.rs"
 [[bin]]
 name = "state_divergence"
 path = "src_phase2_f/bin/state_divergence.rs"
+
+[[bin]]
+name = "invariance_signature"
+path = "src_phase2_f/bin/invariance_signature.rs"
