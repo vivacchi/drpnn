@@ -139,19 +139,30 @@ pub fn conductance_decay_m2() -> i32 {
     v
 }
 
-/// **M2 の因果窓** [step]。(2026-08-28・§14.53)
+/// **M2 の因果窓** [step]。(2026-08-29 既定 40 へ・§14.55 ユーザー承認)
 ///
-/// **M1 の 40 step は引き継がない。** M1 の旧 160 が「ただの既定値」だったのに対し、
-/// **M2 の 320 (160 ms) は M2_A2_DESIGN.md §2.4 の明示された設計判断 (音節スケール) であり、
-/// M2 で検証する仮説そのものである。** 上書きしたら仮説を消してしまう。
-/// `DRPNN_M2_CAUSAL_WINDOW` で A/B できる (既定 320 = 設計値)。
+/// ## 経緯 — 設計仮説はデータに反対された
+///
+/// 当初の 320 (160 ms) は M2_A2_DESIGN.md §2.4 の設計判断 (音節スケールの統合を
+/// 広い STDP 窓で行う) だった。§14.53 の初投入では**仮説そのものだったので
+/// あえて引き継がず** 320 のまま測り、§14.55 で A/B にかけた。
+///
+/// **結果: 40 (文献値 20 ms) が M2 のほぼ全セルで 320 を上回った**
+/// (順序盲の最良 36.7% → 58.3%・M1 との差 30pt → 8.4pt)。
+///
+/// 機構は M1 の A 案 (§14.45) と同一: LTD 被弾の減少 → conductance 維持 → 信号伝播の改善。
+/// **生物学とも整合する**: 実物の STDP 窓は部位によらず ~20 ms であり、
+/// **長い時間スケールの統合は広い STDP 窓ではなく回路動態と再帰が担う。**
+/// 「文献値に合わせると勝つ」の 5 例目。
+///
+/// `DRPNN_M2_CAUSAL_WINDOW=320` で旧設計値に戻せる。
 pub fn causal_window_m2() -> i32 {
     static V: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
     use std::sync::atomic::Ordering;
     let v = V.load(Ordering::Relaxed);
     if v < 0 {
         let w = std::env::var("DRPNN_M2_CAUSAL_WINDOW").ok()
-            .and_then(|s| s.parse::<i32>().ok()).unwrap_or(320).max(2);
+            .and_then(|s| s.parse::<i32>().ok()).unwrap_or(40).max(2);
         V.store(w, Ordering::Relaxed);
         return w;
     }
