@@ -24,7 +24,12 @@
 /// 3: 4 回バースト発火 + 2-3 step 不応期 (機能的不応期相当)
 pub const ENTHALPY_PER_SPIKE: i32 = 3;
 
-/// **シャント抑制** (2026-08-29・§14.59)。**既定 OFF** (効果測定と採否はユーザー判断)。
+/// **シャント抑制** (2026-08-29・§14.59)。**既定 ON (§14.59.3 ユーザー承認で採用)。**
+///
+/// 採用根拠: M2 の軌道信頼性が全指標で改善 (群内相関 0.314->0.411・帰無帯 0.612->0.490・
+/// 濃縮 28%->43%)・順序課題の語末窓 +10pt・回帰なし・M0.5 内部対照は不変。
+/// M1 の僅かな悪化 (濃縮 50->40%) を理由に物理的真実を層で切り分けることはしない
+/// (GABA-A のシャント性は M1 でも真)。`DRPNN_SHUNT=0` で従来 (減算) に戻せる。
 ///
 /// ## なぜ
 ///
@@ -55,7 +60,7 @@ pub fn shunt_enabled() -> bool {
     use std::sync::atomic::Ordering;
     let v = SHUNT.load(Ordering::Relaxed);
     if v == 2 {
-        let on = std::env::var("DRPNN_SHUNT").map(|s| s == "1").unwrap_or(false);
+        let on = std::env::var("DRPNN_SHUNT").map(|s| s != "0").unwrap_or(true);
         SHUNT.store(on as u8, Ordering::Relaxed);
         return on;
     }
