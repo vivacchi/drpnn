@@ -76,13 +76,8 @@ fn load_moras(n: usize) -> Vec<Mora> {
 }
 
 fn m2_input(m1: &ThermoNetwork, fired: &[usize], n_in: usize) -> Vec<i32> {
-    let mut v = vec![0i32; n_in];
-    for &nid in fired {
-        if let Some(oi) = m1.output_index_of(nid) {
-            if oi < n_in { v[oi] = v[oi].saturating_add(INPUT_CURRENT_M2); }
-        }
-    }
-    v
+    // §14.62: 共有ヘルパへ委譲 (DRPNN_M2_PROJ で legacy / topo を切替)
+    spiking_brain::phase2_f::thermo_network::project_m1_m2(m1, fired, n_in)
 }
 
 /// pre→post の種別 (0=入力→E, 1=入力→I, 2=E→E, 3=E→I, 4=**I→E**, 5=I→I)

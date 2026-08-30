@@ -169,6 +169,65 @@ pub fn causal_window_m2() -> i32 {
     v
 }
 
+/// **段間投射の方式** (2026-08-30・§14.62 Step 2)。**既定 legacy** (A/B 測定後に採否)。
+///
+/// - `legacy`: M1 の**出力層 40** → M2 入力 40 に 1:1 (+60)。従来 (§14.53) と厳密に同一。
+/// - `topo` (`DRPNN_M2_PROJ=topo`): **M1 の全興奮性皮質ニューロン (365) が位相投射で収束**。
+///
+/// ## topo の設計 (発明ゼロ・ユーザー承認 Q1-A/Q2-A)
+///
+/// - **源 = 全興奮性皮質** — 生体規則「錐体細胞は事実上すべて投射する。局所限定は
+///   介在ニューロンだけ」(§14.60)。**抑制性は投射しない** (Dale: 抑制を段間に運ばない)。
+/// - **束ね方 = 位相投射 (トポグラフィック)** — M1 皮質の格子座標 (x, y) から
+///   `target = x + (y % 2) × grid_width`。**幾何から一意に決まりパラメータゼロ。**
+///   軸索成長が作った「近い場所 = 関連する機能」という空間構造を破壊せずに次段へ渡す。
+/// - **電流 = 既存の +60 のまま** (CN の FIRE_CURRENT と同じ既存値)。収束で増える駆動は
+///   **手で割らず、既存の入力慣化 (F 案・local_entropy → 閾値) に利得調整をさせる** —
+///   生体の恒常性そのもののストレステストであり、飽和すれば G107a (健全性) に即座に出る。
+static M2_PROJ_TOPO: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
+
+/// topo 投射が有効か。初回だけ環境変数を読む。**乱数は使わない。**
+pub fn m2_proj_topo() -> bool {
+    use std::sync::atomic::Ordering;
+    let v = M2_PROJ_TOPO.load(Ordering::Relaxed);
+    if v == 2 {
+        let on = std::env::var("DRPNN_M2_PROJ").map(|s| s == "topo").unwrap_or(false);
+        M2_PROJ_TOPO.store(on as u8, Ordering::Relaxed);
+        return on;
+    }
+    v == 1
+}
+
+/// 実行時に切り替える (対照実験用)。**false = legacy = 従来と厳密に同一。**
+pub fn set_m2_proj_topo(on: bool) {
+    M2_PROJ_TOPO.store(on as u8, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// **M1 → 次段の投射** (プローブ共通のヘルパ・§14.62)。
+/// 発火した M1 ニューロンを次段の入力電流ベクトル (長さ `n_targets`) に写す。
+pub fn project_m1_m2(m1: &ThermoNetwork, fired: &[usize], n_targets: usize) -> Vec<i32> {
+    /// 既存値 (m0_cn_m1_m2_pipeline の INPUT_CURRENT_M2 = CN の FIRE_CURRENT)
+    const CURRENT: i32 = 60;
+    let mut v = vec![0i32; n_targets];
+    if m2_proj_topo() {
+        let w = m1.config.grid_width.max(1);
+        for &nid in fired {
+            if m1.input_neurons.contains(&nid) { continue; }        // 入力層は投射しない
+            if m1.neurons[nid].is_inhibitory { continue; }          // 介在ニューロンは局所のみ
+            let (x, y) = m1.neurons[nid].position;
+            let t = (x.rem_euclid(w) + (y.rem_euclid(2)) * w) as usize;
+            if t < n_targets { v[t] = v[t].saturating_add(CURRENT); }
+        }
+    } else {
+        for &nid in fired {
+            if let Some(oi) = m1.output_index_of(nid) {
+                if oi < n_targets { v[oi] = v[oi].saturating_add(CURRENT); }
+            }
+        }
+    }
+    v
+}
+
 /// **M1 の因果窓** [step]。(2026-08-27)
 ///
 /// ## なぜ変えたか
