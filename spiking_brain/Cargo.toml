@@ -379,3 +379,7 @@ path = "src_phase2_f/bin/invariance_signature.rs"
 [[bin]]
 name = "ei_census"
 path = "src_phase2_f/bin/ei_census.rs"
+
+[[bin]]
+name = "mora_order_full"
+path = "src_phase2_f/bin/mora_order_full.rs"

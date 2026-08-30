@@ -130,6 +130,9 @@ fn load_moras(n: usize) -> (Vec<Mora>, usize) {
 
 struct Readout { cn84: Vec<(usize, Vec<f64>)>, cn40: Vec<(usize, Vec<f64>)>,
                  m1: Vec<(usize, Vec<f64>)>, m1d: Vec<(usize, Vec<f64>)>,
+                 /// **M1 全皮質** (§14.60 開口の是正・2026-08-30)。生体規則:
+                 /// 興奮性錐体細胞は事実上すべて投射する。出力層 40/436 は開口が 1 桁狭い。
+                 m1f: Vec<(usize, Vec<f64>)>,
                  m1_density: f64 }
 
 /// **複製の側に**単語テストを流す。本線は触らない。
@@ -137,6 +140,9 @@ fn battery(net: &ThermoNetwork, co: &Cochlea, cn: &CochlearNucleus) -> Readout {
     let ws = words();
     let n_out = net.output_neurons.len();
     let (mut c84, mut c40, mut m1v, mut m1d) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let mut m1fv: Vec<(usize, Vec<f64>)> = Vec::new();
+    let n1_in = net.input_neurons.len();
+    let nf = net.n_neurons() - n1_in;
     let mut m1_total = 0f64;
     for v in 0..N_VAR {
         // **変種ごとに複製する。**変種どうしが互いを汚さない。
@@ -151,6 +157,7 @@ fn battery(net: &ThermoNetwork, co: &Cochlea, cn: &CochlearNucleus) -> Readout {
             let mut f84 = vec![0f64; n_frames * N_CN_OUTPUT];
             let mut f40 = vec![0f64; n_frames * 40];
             let mut fm1 = vec![0f64; n_frames * n_out];
+            let mut fmf = vec![0f64; n_frames * nf];
             let mut fm1d = vec![0f64; n_frames * n_out];
             for (step, chunk) in wave.chunks(SAMPLES_PER_STEP).enumerate() {
                 if chunk.len() < SAMPLES_PER_STEP { break; }
@@ -163,6 +170,7 @@ fn battery(net: &ThermoNetwork, co: &Cochlea, cn: &CochlearNucleus) -> Readout {
                     for i in 0..40 { if cno[4 + i] != 0 { f40[fr * 40 + i] += 1.0; } }
                 }
                 for nid in net.step(&cno) {
+                    if nid >= n1_in && fr < n_frames { fmf[fr * nf + (nid - n1_in)] += 1.0; }
                     if let Some(oi) = net.output_index_of(nid) {
                         m1_total += 1.0;
                         if fr < n_frames { fm1[fr * n_out + oi] += 1.0; }
@@ -173,10 +181,11 @@ fn battery(net: &ThermoNetwork, co: &Cochlea, cn: &CochlearNucleus) -> Readout {
                 }
             }
             c84.push((w, f84)); c40.push((w, f40)); m1v.push((w, fm1)); m1d.push((w, fm1d));
+            m1fv.push((w, fmf));
         }
     }
     let n = c84.len() as f64;
-    Readout { cn84: c84, cn40: c40, m1: m1v, m1d, m1_density: m1_total / n }
+    Readout { cn84: c84, cn40: c40, m1: m1v, m1d, m1f: m1fv, m1_density: m1_total / n }
 }
 
 fn cosine(a: &[f64], b: &[f64]) -> f64 {
@@ -298,6 +307,7 @@ fn main() {
     if loop_n > 0 { println!("  **【ループ腕】最初の {} モーラを繰り返す (新素材なし)**", loop_n); }
     println!("  フレーム長 = {} step ({} ms)", frame_steps(), frame_steps() as f64 * 0.5);
     let mut rows: Vec<(usize, f64, f64, f64, f64, f64, usize, usize)> = Vec::new();
+    let mut rows_f: Vec<f64> = Vec::new();
     let mut null95 = 0f64;
     let mut nullb = 0f64;
     let mut next = 0usize;
@@ -306,6 +316,7 @@ fn main() {
             let r = battery(&net, &co, &cn);
             let (a84, a40) = (acc(&r.cn84), acc(&r.cn40));
             let (am1, am1d) = (acc(&r.m1), acc(&r.m1d));
+            let am1f = acc(&r.m1f);
             if next == 0 {
                 let nb = neighbors(&r.cn40);
                 let p = perm_null(&r.cn40, &nb);
@@ -315,6 +326,7 @@ fn main() {
             let live = net.synapses.iter()
                 .filter(|s| s.alive && s.conductance >= SIGNAL_SCALE_DIVISOR).count();
             rows.push((i, a84, a40, am1, am1d, r.m1_density, alive, live));
+            rows_f.push(am1f);
             next += 1;
         }
         if i == moras.len() { break; }
@@ -334,11 +346,11 @@ fn main() {
 
     println!();
     println!("--- 単語の同定率 (最小対 32 語 × 4 変種 = 128 条件・フレーム列・窓なし) ---");
-    println!("  {:>7} | {:>8} {:>8} | {:>9} {:>10} | {:>9} {:>9} {:>9}",
-             "聞いた", "M0.5(84)", "**CN40**", "**M1(40)**", "M1(遅延補正)", "M1発火/語", "alive", "伝達可");
-    for (m, a84, a40, am1, am1d, d, al, lv) in rows.iter() {
-        println!("  {:>7} | {:>7.1}% {:>7.1}% | {:>8.1}% {:>9.1}% | {:>9.1} {:>9} {:>9}",
-                 m, a84, a40, am1, am1d, d, al, lv);
+    println!("  {:>7} | {:>8} {:>8} | {:>9} {:>10} {:>12} | {:>9} {:>9} {:>9}",
+             "聞いた", "M0.5(84)", "**CN40**", "**M1(40)**", "M1(遅延補正)", "**M1全皮質**", "M1発火/語", "alive", "伝達可");
+    for (k, (m, a84, a40, am1, am1d, d, al, lv)) in rows.iter().enumerate() {
+        println!("  {:>7} | {:>7.1}% {:>7.1}% | {:>8.1}% {:>9.1}% {:>11.1}% | {:>9.1} {:>9} {:>9}",
+                 m, a84, a40, am1, am1d, rows_f[k], d, al, lv);
     }
     println!("  **置換帰無: 95%点 {:.1}% / Bonferroni(8地点) {:.1}%**", null95, nullb);
 
@@ -356,6 +368,12 @@ fn main() {
     println!("  **G96b M1 vs CN40 (次元をそろえた対照)** -> M1 最良 {:.1}% / CN40 最良 {:.1}% -> {}",
              m1_best, a40_best,
              if m1_best > a40_best { "**M1 が上 — 帰無が破れた**" } else { "**CN40 が上 — 帰無は保たれた**" });
+
+    let b84 = rows.iter().map(|r| r.1).fold(f64::NEG_INFINITY, f64::max);
+    let bf = rows_f.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    println!("  **G96b' (開口是正版・§14.60): M1全皮質 最良 {:.1}% vs M0.5(84) 最良 {:.1}%** -> {}",
+             bf, b84, if bf > b84 { "**M1全皮質が上 — 段の追加が全集団レベルで情報を足している**" }
+                      else { "M0.5 が上" });
 
     let rho = spearman(&m1s);
     let p = spearman_p(&m1s);
